@@ -89,6 +89,9 @@ struct ContentView: View {
                         .tracking(7)
                         .foregroundStyle(.blue)
                         .accessibilityLabel("Pairing code \(pin)")
+                    Text("We also sent this code in a notification.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(16)

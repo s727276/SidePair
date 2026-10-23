@@ -16,7 +16,7 @@ enum PairingState: Equatable {
 }
 
 @MainActor
-final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate {
+final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate, UNUserNotificationCenterDelegate {
     @Published private(set) var state: PairingState = .ready
     @Published private(set) var pairingFileURL: URL?
     @Published private(set) var deviceName: String?
@@ -30,6 +30,7 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate {
 
     override init() {
         super.init()
+        UNUserNotificationCenter.current().delegate = self
         restorePairingFile()
     }
 
@@ -92,7 +93,9 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate {
 
         let existingHost = cachedHost
         let pinContext = PairingPINContext { [weak self] pin in
-            Task { @MainActor in self?.receivedPIN(pin, session: session) }
+            DispatchQueue.main.async {
+                self?.receivedPIN(pin, session: session)
+            }
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -160,10 +163,19 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate {
 
         let content = UNMutableNotificationContent()
         content.title = "SidePair pairing code"
-        content.body = "Enter \(pin) in Settings to pair with SidePair."
+        content.body = "Your code is \(pin). Enter it in Developer Mode settings."
         content.sound = .default
+        content.threadIdentifier = "sidepair-pairing"
         let request = UNNotificationRequest(identifier: "sidepair-pairing-pin", content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
     }
 
     private func finish(_ result: PairingRunResult, session: UUID) {
