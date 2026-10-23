@@ -133,6 +133,7 @@
 			name = SidePair;
 			packageProductDependencies = (
 				CAF3A4748C1047BF56D9A70C /* IDevice */,
+				CA28C5A3B52B2BF9F92122CE /* ZIPFoundation */,
 			);
 			productName = SidePair;
 			productReference = 0A0000000000000000000003 /* SidePair.app */;
@@ -216,6 +217,9 @@
 			);
 			mainGroup = 0A0000000000000000000002;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				6886D0B32B442D2CA5C9A84A /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 0A0000000000000000000004 /* Products */;
 			projectDirPath = "";
@@ -586,7 +590,23 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		6886D0B32B442D2CA5C9A84A /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.19;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
+		CA28C5A3B52B2BF9F92122CE /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6886D0B32B442D2CA5C9A84A /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
 		CAF3A4748C1047BF56D9A70C /* IDevice */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = IDevice;

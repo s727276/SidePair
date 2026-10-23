@@ -30,7 +30,14 @@ struct ContentView: View {
             .navigationTitle("SidePair")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    NavigationLink {
+                        AppLibraryView(connection: connection, pairingFileURL: pairing.pairingFileURL)
+                    } label: {
+                        Image(systemName: "square.stack.3d.up.fill")
+                    }
+                    .accessibilityLabel("App Library")
+
                     NavigationLink {
                         AppleSigningView()
                     } label: {
@@ -217,7 +224,7 @@ struct ContentView: View {
                 .background(connection.isConnected ? Color.gray : Color.blue, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
             .buttonStyle(.plain)
-            .disabled(connection.isConnecting || (!connection.isConnected && pairing.pairingFileURL == nil))
+            .disabled(connection.isConnecting || connection.isInstalling || (!connection.isConnected && pairing.pairingFileURL == nil))
 
             if !connection.isConnected && !connection.isConnecting && !connection.isSupportedSystem {
                 Text("The on-device Remote Pairing tunnel requires iOS 27 or later.")
