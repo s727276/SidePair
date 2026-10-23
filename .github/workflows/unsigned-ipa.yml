@@ -13,9 +13,19 @@ jobs:
   build-unsigned-ipa:
     name: Build unsigned iOS IPA
     runs-on: macos-26
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/SigningBridgeTarget
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Install Rust iOS target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Build Apple signing bridge
+        run: cargo build --manifest-path SigningBridge/Cargo.toml --release --target aarch64-apple-ios
 
       - name: Show Xcode version
         run: xcodebuild -version
@@ -25,6 +35,7 @@ jobs:
 
       - name: Build for iPhone without signing
         run: |
+          BRIDGE_LIB="$CARGO_TARGET_DIR/aarch64-apple-ios/release"
           xcodebuild \
             -project SidePair.xcodeproj \
             -scheme SidePair \
@@ -35,7 +46,9 @@ jobs:
             build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+            CODE_SIGN_IDENTITY="" \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) SIGNING_BRIDGE' \
+            OTHER_LDFLAGS="\$(inherited) -L$BRIDGE_LIB -lsidepair_signing_bridge -lc++ -framework Security -framework CoreFoundation -framework SystemConfiguration -framework CFNetwork"
 
       - name: Package unsigned IPA
         run: |

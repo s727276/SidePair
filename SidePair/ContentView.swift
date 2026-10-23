@@ -7,6 +7,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var pairing = PairingHostModel()
+    @StateObject private var connection = RSDConnectionModel()
 
     var body: some View {
         NavigationStack {
@@ -14,6 +15,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 22) {
                     introCard
                     pairingCard
+                    connectionCard
                     setupCard
                     if let pairingFileURL = pairing.pairingFileURL {
                         pairingFileCard(pairingFileURL)
@@ -27,6 +29,16 @@ struct ContentView: View {
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle("SidePair")
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        AppleSigningView()
+                    } label: {
+                        Image(systemName: "person.badge.key.fill")
+                    }
+                    .accessibilityLabel("Apple signing")
+                }
+            }
         }
         .tint(.blue)
     }
@@ -132,6 +144,99 @@ struct ContentView: View {
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    private var connectionCard: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("LocalDevVPN connection")
+                    .font(.headline)
+                Text("Connect the VPN first, then enter its Device IP. The default is 10.7.0.1—not the VPN’s Connected To address.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text("DEVICE IP")
+                    .font(.caption2.weight(.bold))
+                    .tracking(0.8)
+                    .foregroundStyle(.secondary)
+                TextField("10.7.0.1", text: $connection.deviceIP)
+                    .font(.body.monospaced())
+                    .keyboardType(.numbersAndPunctuation)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .disabled(connection.isConnecting || connection.isConnected)
+                    .padding(12)
+                    .background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            if pairing.pairingFileURL == nil && !connection.isConnected {
+                Label("Pair this iPhone first to create a Remote Pairing record.", systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if case let .failed(message) = connection.state {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if connection.isConnected, let details = connection.deviceDetails {
+                VStack(spacing: 9) {
+                    deviceDetailRow("Device", value: details.name)
+                    deviceDetailRow("Model", value: details.model)
+                    deviceDetailRow("iOS", value: details.version)
+                }
+                .padding(14)
+                .background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+
+            Button {
+                if connection.isConnected {
+                    connection.disconnect()
+                } else {
+                    connection.connect(using: pairing.pairingFileURL)
+                }
+            } label: {
+                HStack(spacing: 9) {
+                    if connection.isConnecting {
+                        ProgressView().tint(.white)
+                    } else {
+                        Image(systemName: connection.isConnected ? "link.badge.minus" : "network")
+                    }
+                    Text(connection.isConnecting ? "Connecting…" : (connection.isConnected ? "Disconnect" : "Connect device"))
+                        .fontWeight(.semibold)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .foregroundStyle(.white)
+                .background(connection.isConnected ? Color.gray : Color.blue, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(connection.isConnecting || (!connection.isConnected && pairing.pairingFileURL == nil))
+
+            if !connection.isConnected && !connection.isConnecting && !connection.isSupportedSystem {
+                Text("The on-device Remote Pairing tunnel requires iOS 27 or later.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    private func deviceDetailRow(_ title: String, value: String) -> some View {
+        HStack {
+            Text(title).foregroundStyle(.secondary)
+            Spacer()
+            Text(value).fontWeight(.medium).multilineTextAlignment(.trailing)
+        }
+        .font(.subheadline)
     }
 
     private var setupCard: some View {
