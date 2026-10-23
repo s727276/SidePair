@@ -36,6 +36,42 @@ struct AppleTwoFactorPrompt: Identifiable {
     let request: AppleTwoFactorRequest
 }
 
+private struct SideStoreAccountConfiguration: Decodable {
+    let email: String
+    let password: String
+    let certificate: Data
+    let certificatePassword: String
+
+    private enum CodingKeys: String, CodingKey {
+        case email
+        case password
+        case certificate = "cert"
+        case certificatePassword = "certpass"
+    }
+
+    static func decode(_ fileData: Data) throws -> Self {
+        guard fileData.count <= 10 * 1024 * 1024 else {
+            throw AppleSigningImportError.configurationTooLarge
+        }
+        let jsonData = Data(base64Encoded: fileData, options: .ignoreUnknownCharacters) ?? fileData
+        return try JSONDecoder().decode(Self.self, from: jsonData)
+    }
+}
+
+private enum AppleSigningImportError: LocalizedError {
+    case invalidSideStoreConfiguration
+    case configurationTooLarge
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidSideStoreConfiguration:
+            "The configuration is missing a valid Apple ID, password, or certificate."
+        case .configurationTooLarge:
+            "The SideStore configuration file is unexpectedly large."
+        }
+    }
+}
+
 @MainActor
 final class AppleSigningModel: ObservableObject {
     @Published var appleId = ""
@@ -81,17 +117,57 @@ final class AppleSigningModel: ObservableObject {
             errorMessage = "Enter a valid Apple ID and password."
             return
         }
+        authenticate(account: account, password: password, sideStoreCertificate: nil)
+    }
 
+    func reportImportError(_ error: Error) {
+        errorMessage = error.localizedDescription
+    }
+
+    func importSideStoreConfiguration(from fileURL: URL) {
+        guard !isWorking else { return }
+        guard hasSigningBridge else {
+            errorMessage = "This build does not include the Apple signing engine."
+            return
+        }
+
+        let hasSecurityScope = fileURL.startAccessingSecurityScopedResource()
+        defer {
+            if hasSecurityScope { fileURL.stopAccessingSecurityScopedResource() }
+        }
+
+        do {
+            let fileData = try Data(contentsOf: fileURL)
+            let imported = try SideStoreAccountConfiguration.decode(fileData)
+            guard imported.email.contains("@"), !imported.password.isEmpty, !imported.certificate.isEmpty else {
+                throw AppleSigningImportError.invalidSideStoreConfiguration
+            }
+            appleId = imported.email
+            authenticate(
+                account: imported.email,
+                password: imported.password,
+                sideStoreCertificate: imported
+            )
+        } catch {
+            errorMessage = "Could not import this SideStore configuration: \(error.localizedDescription)"
+        }
+    }
+
+    private func authenticate(
+        account: String,
+        password: String,
+        sideStoreCertificate: SideStoreAccountConfiguration?
+    ) {
         do {
             try prepareProtectedStorage()
         } catch {
             errorMessage = "Could not prepare protected local signing storage: \(error.localizedDescription)"
-            password = ""
+            self.password = ""
             return
         }
 
         let suppliedPassword = password
-        password = ""
+        self.password = ""
         errorMessage = nil
         status = nil
         isWorking = true
@@ -116,7 +192,29 @@ final class AppleSigningModel: ObservableObject {
                 suppliedPassword.withCString { passwordPointer in
                     storagePath.withCString { storagePointer in
                         bundleID.withCString { bundlePointer in
-                            sidepair_sign_in(
+                            if let sideStoreCertificate {
+                                return sideStoreCertificate.certificate.withUnsafeBytes { certificateBytes in
+                                    guard let certificatePointer = certificateBytes.baseAddress?
+                                        .assumingMemoryBound(to: UInt8.self) else { return -1 }
+                                    return sideStoreCertificate.certificatePassword.withCString { certificatePasswordPointer in
+                                        sidepair_sign_in_with_p12(
+                                            accountPointer,
+                                            passwordPointer,
+                                            storagePointer,
+                                            bundlePointer,
+                                            certificatePointer,
+                                            UInt(certificateBytes.count),
+                                            certificatePasswordPointer,
+                                            signingTwoFactorCallback,
+                                            retainedContext,
+                                            &sessionOutput,
+                                            &statusOutput,
+                                            &errorOutput
+                                        )
+                                    }
+                                }
+                            }
+                            return sidepair_sign_in(
                                 accountPointer,
                                 passwordPointer,
                                 storagePointer,
@@ -464,6 +562,22 @@ private func sidepair_sign_in(
     _ password: UnsafePointer<CChar>,
     _ storageDirectory: UnsafePointer<CChar>,
     _ bundleID: UnsafePointer<CChar>,
+    _ twoFactorCallback: SigningTwoFactorCallback?,
+    _ callbackContext: UnsafeMutableRawPointer?,
+    _ outSessionJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
+    _ outStatusJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
+    _ outError: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> Int32
+
+@_silgen_name("sidepair_sign_in_with_p12")
+private func sidepair_sign_in_with_p12(
+    _ appleID: UnsafePointer<CChar>,
+    _ password: UnsafePointer<CChar>,
+    _ storageDirectory: UnsafePointer<CChar>,
+    _ bundleID: UnsafePointer<CChar>,
+    _ p12Data: UnsafePointer<UInt8>,
+    _ p12Length: UInt,
+    _ p12Password: UnsafePointer<CChar>,
     _ twoFactorCallback: SigningTwoFactorCallback?,
     _ callbackContext: UnsafeMutableRawPointer?,
     _ outSessionJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,

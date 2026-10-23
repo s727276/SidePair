@@ -1,9 +1,12 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct AppleSigningView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var model: AppleSigningModel
     @State private var isPasswordVisible = false
+    @State private var showingSideStoreImportWarning = false
+    @State private var showingSideStoreImporter = false
 
     var body: some View {
         ScrollView {
@@ -18,6 +21,8 @@ struct AppleSigningView: View {
                     passwordField
                     continueButton
                 }
+
+                sideStoreImportButton
 
                 if let error = model.errorMessage {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -58,6 +63,18 @@ struct AppleSigningView: View {
                 model.cancelTwoFactor()
             }
         }
+        .alert("Import SideStore account?", isPresented: $showingSideStoreImportWarning) {
+            Button("Cancel", role: .cancel) {}
+            Button("Choose .sideconf") { showingSideStoreImporter = true }
+        } message: {
+            Text("SideStore .sideconf files contain your Apple ID password and certificate password. They are Base64-encoded, not encrypted. Only import trusted files. SidePair uses the password to authenticate with Apple, then keeps the signing session in Keychain and the imported private key in protected app storage; it does not save the raw file or password.")
+        }
+        .fileImporter(
+            isPresented: $showingSideStoreImporter,
+            allowedContentTypes: [sideStoreConfigurationType],
+            allowsMultipleSelection: false,
+            onCompletion: handleSideStoreImport
+        )
     }
 
     private var header: some View {
@@ -71,6 +88,36 @@ struct AppleSigningView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 8)
+    }
+
+    private var sideStoreImportButton: some View {
+        Button {
+            showingSideStoreImportWarning = true
+        } label: {
+            Label("Import SideStore account file", systemImage: "doc.badge.arrow.up")
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isWorking || !model.hasSigningBridge)
+    }
+
+    private var sideStoreConfigurationType: UTType {
+        UTType(filenameExtension: "sideconf", conformingTo: .data) ?? .data
+    }
+
+    private func handleSideStoreImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case let .success(urls):
+            guard let url = urls.first else { return }
+            model.importSideStoreConfiguration(from: url)
+        case let .failure(error):
+            if (error as? CocoaError)?.code != .userCancelled {
+                model.reportImportError(error)
+            }
+        }
     }
 
     private var privacyCard: some View {
