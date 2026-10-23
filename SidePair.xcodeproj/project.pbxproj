@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		27B105D79840001BC0D8977D /* IDevice in Frameworks */ = {isa = PBXBuildFile; productRef = CAF3A4748C1047BF56D9A70C /* IDevice */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		0A0000000000000000000021 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,10 +31,11 @@
 		0A0000000000000000000003 /* SidePair.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SidePair.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A0000000000000000000023 /* SidePairTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SidePairTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A0000000000000000000033 /* SidePairUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SidePairUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		86F268F8B922EEFD8A8E85CD /* IDevice */ = {isa = PBXFileReference; lastKnownFileType = folder; name = IDevice; path = IDeviceBinary; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		0A0000000000000000000011 /* Exceptions for "SidePair" folder in "SidePair" target */ = {
+		0A0000000000000000000011 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -43,7 +48,7 @@
 		0A0000000000000000000005 /* SidePair */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				0A0000000000000000000011 /* Exceptions for "SidePair" folder in "SidePair" target */,
+				0A0000000000000000000011 /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
 			);
 			path = SidePair;
 			sourceTree = "<group>";
@@ -65,6 +70,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				27B105D79840001BC0D8977D /* IDevice in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -92,6 +98,7 @@
 				0A0000000000000000000025 /* SidePairTests */,
 				0A0000000000000000000035 /* SidePairUITests */,
 				0A0000000000000000000004 /* Products */,
+				86F268F8B922EEFD8A8E85CD /* IDevice */,
 			);
 			sourceTree = "<group>";
 		};
@@ -125,6 +132,7 @@
 			);
 			name = SidePair;
 			packageProductDependencies = (
+				CAF3A4748C1047BF56D9A70C /* IDevice */,
 			);
 			productName = SidePair;
 			productReference = 0A0000000000000000000003 /* SidePair.app */;
@@ -577,6 +585,13 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		CAF3A4748C1047BF56D9A70C /* IDevice */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = IDevice;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 0A0000000000000000000001 /* Project object */;
 }

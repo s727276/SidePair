@@ -1,0 +1,55 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-unsigned-ipa:
+    name: Build unsigned iOS IPA
+    runs-on: macos-26
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project SidePair.xcodeproj -scheme SidePair
+
+      - name: Build for iPhone without signing
+        run: |
+          xcodebuild \
+            -project SidePair.xcodeproj \
+            -scheme SidePair \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package unsigned IPA
+        run: |
+          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/SidePair.app"
+          test -d "$APP_PATH"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          ditto "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/SidePair.app"
+          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/ipa/Payload" "$RUNNER_TEMP/SidePair-unsigned.ipa"
+          unzip -l "$RUNNER_TEMP/SidePair-unsigned.ipa"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SidePair-unsigned-ipa
+          path: ${{ runner.temp }}/SidePair-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14

@@ -8,6 +8,12 @@
 	<string>com.organizationName.SidePair</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>SidePair advertises a secure pairing host on your local network so this iPhone can pair with SidePair from Developer Mode.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_remotepairing-pairable-host._tcp</string>
+	</array>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
