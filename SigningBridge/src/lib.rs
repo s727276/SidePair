@@ -1,4 +1,5 @@
 use isideload::{
+    anisette::remote_v3::RemoteV3AnisetteProvider,
     auth::apple_account::{AppleAccount, AppToken, TwoFactorCallbackParams, TwoFactorCallbackResponse},
     dev::{
         app_ids::AppIdsApi,
@@ -134,6 +135,12 @@ fn initialize() -> Result<(), String> {
         .clone()
 }
 
+fn create_anisette_provider(storage_dir: &Path) -> Result<RemoteV3AnisetteProvider, String> {
+    let provider = RemoteV3AnisetteProvider::default()
+        .map_err(|error| format!("could not initialize anisette provider: {error}"))?;
+    Ok(provider.set_storage(Box::new(FsStorage::new(storage_dir.to_path_buf()))))
+}
+
 fn make_two_factor_callback(
     callback: SigningTwoFactorCallback,
     context: *mut c_void,
@@ -160,7 +167,9 @@ async fn sign_in(
     callback: SigningTwoFactorCallback,
     callback_context: *mut c_void,
 ) -> Result<(String, SigningStatus), String> {
+    let anisette_provider = create_anisette_provider(&storage_dir)?;
     let mut account = AppleAccount::builder(&apple_id)
+        .anisette_provider(anisette_provider)
         .login(
             password.as_str(),
             make_two_factor_callback(callback, callback_context),
@@ -241,7 +250,9 @@ async fn restore_session(
 ) -> Result<SigningStatus, String> {
     let saved: StoredSession = serde_json::from_str(&session_json)
         .map_err(|error| format!("saved signing session is invalid: {error}"))?;
+    let anisette_provider = create_anisette_provider(&storage_dir)?;
     let account = AppleAccount::builder(&saved.apple_id)
+        .anisette_provider(anisette_provider)
         .build()
         .await
         .map_err(|error| format!("could not restore Apple account session: {error}"))?;
