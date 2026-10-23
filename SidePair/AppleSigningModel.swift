@@ -1,4 +1,5 @@
 import Combine
+import Darwin
 import Foundation
 import Security
 
@@ -188,47 +189,17 @@ final class AppleSigningModel: ObservableObject {
             var sessionOutput: UnsafeMutablePointer<CChar>?
             var statusOutput: UnsafeMutablePointer<CChar>?
             var errorOutput: UnsafeMutablePointer<CChar>?
-            let result = account.withCString { accountPointer in
-                suppliedPassword.withCString { passwordPointer in
-                    storagePath.withCString { storagePointer in
-                        bundleID.withCString { bundlePointer in
-                            if let sideStoreCertificate {
-                                return sideStoreCertificate.certificate.withUnsafeBytes { certificateBytes in
-                                    guard let certificatePointer = certificateBytes.baseAddress?
-                                        .assumingMemoryBound(to: UInt8.self) else { return -1 }
-                                    return sideStoreCertificate.certificatePassword.withCString { certificatePasswordPointer in
-                                        sidepair_sign_in_with_p12(
-                                            accountPointer,
-                                            passwordPointer,
-                                            storagePointer,
-                                            bundlePointer,
-                                            certificatePointer,
-                                            UInt(certificateBytes.count),
-                                            certificatePasswordPointer,
-                                            signingTwoFactorCallback,
-                                            retainedContext,
-                                            &sessionOutput,
-                                            &statusOutput,
-                                            &errorOutput
-                                        )
-                                    }
-                                }
-                            }
-                            return sidepair_sign_in(
-                                accountPointer,
-                                passwordPointer,
-                                storagePointer,
-                                bundlePointer,
-                                signingTwoFactorCallback,
-                                retainedContext,
-                                &sessionOutput,
-                                &statusOutput,
-                                &errorOutput
-                            )
-                        }
-                    }
-                }
-            }
+            let result = invokeAppleSignIn(
+                account: account,
+                password: suppliedPassword,
+                storagePath: storagePath,
+                bundleID: bundleID,
+                certificate: sideStoreCertificate,
+                callbackContext: retainedContext,
+                outSessionJSON: &sessionOutput,
+                outStatusJSON: &statusOutput,
+                outError: &errorOutput
+            )
 
             let sessionJSON = sessionOutput.map { String(cString: $0) }
             let statusJSON = statusOutput.map { String(cString: $0) }
@@ -607,6 +578,69 @@ private func sidepair_restore_session(
 
 @_silgen_name("sidepair_signing_string_free")
 private func sidepair_signing_string_free(_ value: UnsafeMutablePointer<CChar>?)
+
+private func duplicateCString(_ value: String) -> UnsafeMutablePointer<CChar>? {
+    value.withCString { strdup($0) }
+}
+
+private func invokeAppleSignIn(
+    account: String,
+    password: String,
+    storagePath: String,
+    bundleID: String,
+    certificate: SideStoreAccountConfiguration?,
+    callbackContext: UnsafeMutableRawPointer,
+    outSessionJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
+    outStatusJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
+    outError: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> Int32 {
+    guard let accountPointer = duplicateCString(account) else { return -1 }
+    defer { free(accountPointer) }
+    guard let passwordPointer = duplicateCString(password) else { return -1 }
+    defer { free(passwordPointer) }
+    guard let storagePointer = duplicateCString(storagePath) else { return -1 }
+    defer { free(storagePointer) }
+    guard let bundlePointer = duplicateCString(bundleID) else { return -1 }
+    defer { free(bundlePointer) }
+
+    if let certificate {
+        guard let certificatePasswordPointer = duplicateCString(certificate.certificatePassword) else {
+            return -1
+        }
+        defer { free(certificatePasswordPointer) }
+        return certificate.certificate.withUnsafeBytes { bytes in
+            guard let certificatePointer = bytes.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                return -1
+            }
+            return sidepair_sign_in_with_p12(
+                accountPointer,
+                passwordPointer,
+                storagePointer,
+                bundlePointer,
+                certificatePointer,
+                UInt(bytes.count),
+                certificatePasswordPointer,
+                signingTwoFactorCallback,
+                callbackContext,
+                outSessionJSON,
+                outStatusJSON,
+                outError
+            )
+        }
+    }
+
+    return sidepair_sign_in(
+        accountPointer,
+        passwordPointer,
+        storagePointer,
+        bundlePointer,
+        signingTwoFactorCallback,
+        callbackContext,
+        outSessionJSON,
+        outStatusJSON,
+        outError
+    )
+}
 
 private let signingTwoFactorCallback: SigningTwoFactorCallback = { context, requestJSON, responseJSON, responseCapacity in
     guard let context, let requestJSON, let responseJSON else { return 0 }
