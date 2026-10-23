@@ -58,6 +58,35 @@ enum IPAArchiveInspector {
         importDirectory().appendingPathComponent(metadata.archiveFileName)
     }
 
+    static func packageSignedApp(at appBundleURL: URL) throws -> URL {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SidePairSigned-\(UUID().uuidString)", isDirectory: true)
+        let payloadDirectory = workspace.appendingPathComponent("Payload", isDirectory: true)
+        let archiveURL = workspace.appendingPathComponent("Signed.ipa")
+
+        do {
+            try FileManager.default.createDirectory(
+                at: payloadDirectory,
+                withIntermediateDirectories: true,
+                attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+            )
+            try FileManager.default.copyItem(
+                at: appBundleURL,
+                to: payloadDirectory.appendingPathComponent(appBundleURL.lastPathComponent, isDirectory: true)
+            )
+            try FileManager.default.zipItem(
+                at: payloadDirectory,
+                to: archiveURL,
+                shouldKeepParent: true,
+                compressionMethod: .deflate
+            )
+            return archiveURL
+        } catch {
+            try? FileManager.default.removeItem(at: workspace)
+            throw error
+        }
+    }
+
     private static func importDirectory() -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("SidePairImportedIPAs", isDirectory: true)
@@ -96,11 +125,6 @@ enum IPAArchiveInspector {
         }
 
         guard archive["\(appRoot)/\(executable)"] != nil else { throw IPAArchiveError.missingExecutable }
-        guard archive["\(appRoot)/_CodeSignature/CodeResources"] != nil,
-              archive["\(appRoot)/embedded.mobileprovision"] != nil else {
-            throw IPAArchiveError.missingDeveloperSignature
-        }
-
         let displayName = (info["CFBundleDisplayName"] as? String)
             ?? (info["CFBundleName"] as? String)
             ?? bundleIdentifier
@@ -117,7 +141,6 @@ private enum IPAArchiveError: LocalizedError {
     case missingInfoPlist
     case invalidInfoPlist
     case missingExecutable
-    case missingDeveloperSignature
 
     var errorDescription: String? {
         switch self {
@@ -131,8 +154,6 @@ private enum IPAArchiveError: LocalizedError {
             "The app bundle has an invalid Info.plist or bundle identifier."
         case .missingExecutable:
             "The app executable listed in Info.plist is missing from the bundle."
-        case .missingDeveloperSignature:
-            "This IPA does not contain a developer code signature and embedded provisioning profile. Install only a developer-signed IPA."
         }
     }
 }

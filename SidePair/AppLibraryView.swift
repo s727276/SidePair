@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct AppLibraryView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var connection: RSDConnectionModel
+    @ObservedObject var signing: AppleSigningModel
     let pairingFileURL: URL?
     @StateObject private var library = AppLibraryModel()
     @State private var showingImporter = false
@@ -12,6 +13,7 @@ struct AppLibraryView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 header
+                signingNote
 
                 if library.apps.isEmpty {
                     emptyLibraryCard
@@ -37,7 +39,7 @@ struct AppLibraryView: View {
             .padding(.top, 32)
             .padding(.bottom, 24)
         }
-        .background(Color(red: 0.94, green: 0.97, blue: 1).ignoresSafeArea())
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
         .safeAreaInset(edge: .bottom, spacing: 0) {
             tabBar
                 .padding(.horizontal, 18)
@@ -46,7 +48,6 @@ struct AppLibraryView: View {
                 .background(.clear)
         }
         .toolbar(.hidden, for: .navigationBar)
-        .preferredColorScheme(.light)
         .fileImporter(
             isPresented: $showingImporter,
             allowedContentTypes: [ipaContentType],
@@ -60,12 +61,38 @@ struct AppLibraryView: View {
             Text("App Library")
                 .font(.system(size: 34, weight: .bold, design: .rounded))
                 .tracking(-0.5)
-                .foregroundStyle(Color(red: 0.08, green: 0.13, blue: 0.25))
+                .foregroundStyle(Color.primary)
             Text("Apps ready for this iPhone")
                 .font(.system(size: 18))
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 8)
+    }
+
+    private var signingNote: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(
+                    signing.status == nil ? "Apple account needed" : "Apple account ready",
+                    systemImage: signing.status == nil ? "person.crop.circle.badge.exclamationmark" : "checkmark.circle.fill"
+                )
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(signing.status == nil ? .orange : .green)
+                Spacer()
+                NavigationLink {
+                    AppleSigningView(model: signing)
+                } label: {
+                    Text(signing.status == nil ? "Sign in" : "Manage")
+                        .font(.subheadline.weight(.semibold))
+                }
+            }
+            Text("SidePair signs imported IPAs with your Apple ID and refreshes them with a newly issued provisioning profile before reinstalling. Personal provisioning uses a team-scoped bundle ID. Free personal profiles commonly last seven days; Apple sets the exact expiration. Some apps or capabilities may not be eligible for your team.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private var emptyLibraryCard: some View {
@@ -74,13 +101,13 @@ struct AppLibraryView: View {
                 .font(.system(size: 43, weight: .medium))
                 .foregroundStyle(Color(red: 0.53, green: 0.61, blue: 0.77))
                 .frame(width: 112, height: 112)
-                .background(Color(red: 0.93, green: 0.96, blue: 1), in: Circle())
+                .background(Color(uiColor: .tertiarySystemGroupedBackground), in: Circle())
 
             VStack(spacing: 7) {
                 Text("Your library is ready")
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color(red: 0.08, green: 0.13, blue: 0.25))
-                Text("Choose a developer-signed IPA to install it over your paired connection.")
+                    .foregroundStyle(Color.primary)
+                Text("Choose any IPA. SidePair signs it with your Apple ID and installs it over your paired connection.")
                     .font(.system(size: 17))
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
@@ -104,10 +131,10 @@ struct AppLibraryView: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 22)
         .padding(.vertical, 30)
-        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .stroke(.white.opacity(0.95), lineWidth: 1)
+                .stroke(Color(uiColor: .separator).opacity(0.35), lineWidth: 1)
         }
         .shadow(color: .blue.opacity(0.06), radius: 18, y: 7)
     }
@@ -145,7 +172,7 @@ struct AppLibraryView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(app.displayName)
                         .font(.headline)
-                    Text(app.bundleIdentifier)
+                    Text("Original ID · \(app.bundleIdentifier)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -169,23 +196,24 @@ struct AppLibraryView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if app.installState != .installed {
-                Button {
-                    Task { try? await library.install(app, connection: connection) }
-                } label: {
-                    Label(library.isBusy ? "Working…" : "Install", systemImage: "arrow.down.to.line")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color.blue, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .foregroundStyle(.white)
-                }
-                .buttonStyle(.plain)
-                .disabled(library.isBusy)
+            Button {
+                Task { try? await library.install(app, signing: signing, connection: connection) }
+            } label: {
+                Label(
+                    library.isBusy ? "Working…" : (app.installState == .installed ? "Refresh & reinstall" : "Sign & install"),
+                    systemImage: app.installState == .installed ? "arrow.clockwise" : "arrow.down.to.line"
+                )
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color.blue, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .foregroundStyle(.white)
             }
+            .buttonStyle(.plain)
+            .disabled(library.isBusy)
         }
         .padding(16)
-        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
     private var progressCard: some View {
@@ -203,7 +231,7 @@ struct AppLibraryView: View {
                 .tint(.blue)
         }
         .padding(16)
-        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private var connectionCard: some View {
@@ -234,7 +262,7 @@ struct AppLibraryView: View {
             .disabled(connection.isConnecting || connection.isInstalling || (!connection.isConnected && pairingFileURL == nil))
         }
         .padding(16)
-        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
     private var connectionDescription: String {
@@ -253,7 +281,7 @@ struct AppLibraryView: View {
         }
         .padding(8)
         .background(.ultraThinMaterial, in: Capsule())
-        .overlay { Capsule().stroke(.white.opacity(0.8), lineWidth: 1) }
+        .overlay { Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1) }
         .shadow(color: .black.opacity(0.08), radius: 14, y: 5)
     }
 
@@ -266,7 +294,7 @@ struct AppLibraryView: View {
             .foregroundStyle(selected ? Color.blue : Color.secondary)
             .frame(maxWidth: .infinity)
             .frame(height: 62)
-            .background { if selected { Capsule().fill(.white.opacity(0.65)) } }
+            .background { if selected { Capsule().fill(Color(uiColor: .tertiarySystemGroupedBackground)) } }
         }
         .buttonStyle(.plain)
         .disabled(selected)
@@ -280,7 +308,7 @@ struct AppLibraryView: View {
         switch result {
         case let .success(urls):
             guard let url = urls.first else { return }
-            library.importIPA(from: url, connection: connection)
+            library.importIPA(from: url, signing: signing, connection: connection)
         case let .failure(error):
             if (error as? CocoaError)?.code != .userCancelled {
                 library.reportImportError(error)

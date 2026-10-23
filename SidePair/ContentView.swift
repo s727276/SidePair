@@ -8,6 +8,7 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var pairing = PairingHostModel()
     @StateObject private var connection = RSDConnectionModel()
+    @StateObject private var signing = AppleSigningModel()
 
     var body: some View {
         NavigationStack {
@@ -32,14 +33,14 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     NavigationLink {
-                        AppLibraryView(connection: connection, pairingFileURL: pairing.pairingFileURL)
+                        AppLibraryView(connection: connection, signing: signing, pairingFileURL: pairing.pairingFileURL)
                     } label: {
                         Image(systemName: "square.stack.3d.up.fill")
                     }
                     .accessibilityLabel("App Library")
 
                     NavigationLink {
-                        AppleSigningView()
+                        AppleSigningView(model: signing)
                     } label: {
                         Image(systemName: "person.badge.key.fill")
                     }
@@ -48,6 +49,7 @@ struct ContentView: View {
             }
         }
         .tint(.blue)
+        .task { signing.restoreSessionIfAvailable() }
     }
 
     private var introCard: some View {

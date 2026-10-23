@@ -7,6 +7,7 @@ struct RSDDeviceDetails: Equatable {
     let name: String
     let model: String
     let version: String
+    let udid: String?
 }
 
 enum RSDConnectionState: Equatable {
@@ -187,7 +188,8 @@ final class RSDConnectionModel: ObservableObject {
         return RSDDeviceDetails(
             name: plistString(values, "DeviceName") ?? "This iPhone",
             model: plistString(values, "ProductType") ?? "Unknown model",
-            version: plistString(values, "ProductVersion") ?? "Unknown iOS version"
+            version: plistString(values, "ProductVersion") ?? "Unknown iOS version",
+            udid: plistString(values, "UniqueDeviceID")
         )
     }
 
@@ -352,7 +354,7 @@ extension RSDConnectionModel {
             )
         }
         Unmanaged<IPAInstallProgressContext>.fromOpaque(context).release()
-        try check(installError, fallback: "iOS rejected the IPA. Confirm it is developer-signed for this device and its profile is valid.")
+        try check(installError, fallback: "iOS rejected the signed IPA. Confirm Apple issued a valid profile and the app's required capabilities are allowed for your team.")
         progress.send(1, "Installation complete")
     }
 }

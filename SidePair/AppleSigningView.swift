@@ -2,7 +2,7 @@ import SwiftUI
 
 struct AppleSigningView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var model = AppleSigningModel()
+    @ObservedObject var model: AppleSigningModel
     @State private var isPasswordVisible = false
 
     var body: some View {
@@ -41,7 +41,7 @@ struct AppleSigningView: View {
             .padding(.top, 32)
             .padding(.bottom, 20)
         }
-        .background(Color(red: 0.94, green: 0.97, blue: 1).ignoresSafeArea())
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
         .safeAreaInset(edge: .bottom, spacing: 0) {
             tabBar
                 .padding(.horizontal, 18)
@@ -50,7 +50,6 @@ struct AppleSigningView: View {
                 .background(.clear)
         }
         .toolbar(.hidden, for: .navigationBar)
-        .preferredColorScheme(.light)
         .task { model.restoreSessionIfAvailable() }
         .sheet(item: $model.twoFactorPrompt) { prompt in
             TwoFactorChallengeView(prompt: prompt) { action, code, phoneID in
@@ -66,7 +65,7 @@ struct AppleSigningView: View {
             Text("Apple signing")
                 .font(.system(size: 34, weight: .bold, design: .rounded))
                 .tracking(-0.5)
-                .foregroundStyle(Color(red: 0.08, green: 0.13, blue: 0.25))
+                .foregroundStyle(Color.primary)
             Text("Sign apps with your personal developer account")
                 .font(.system(size: 18))
                 .foregroundStyle(.secondary)
@@ -80,12 +79,12 @@ struct AppleSigningView: View {
                 .font(.system(size: 38, weight: .medium))
                 .foregroundStyle(Color(red: 0.53, green: 0.61, blue: 0.77))
                 .frame(width: 112, height: 112)
-                .background(Color(red: 0.93, green: 0.96, blue: 1), in: Circle())
+                .background(Color(uiColor: .tertiarySystemGroupedBackground), in: Circle())
 
             Text("Your sign-in and signing data\nstay on this iPhone.")
                 .font(.system(size: 22, weight: .semibold, design: .rounded))
                 .multilineTextAlignment(.center)
-                .foregroundStyle(Color(red: 0.08, green: 0.13, blue: 0.25))
+                .foregroundStyle(Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text("Your password is sent directly to Apple for authentication and is never stored by SidePair. The signing session and private key are protected on this iPhone; Anisette verification uses a remote provider.")
@@ -97,10 +96,10 @@ struct AppleSigningView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 28)
         .padding(.horizontal, 18)
-        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .stroke(.white.opacity(0.95), lineWidth: 1)
+                .stroke(Color(uiColor: .separator).opacity(0.35), lineWidth: 1)
         }
         .shadow(color: .blue.opacity(0.06), radius: 18, y: 7)
     }
@@ -109,7 +108,7 @@ struct AppleSigningView: View {
         VStack(alignment: .leading, spacing: 7) {
             Text("Apple ID")
                 .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(Color(red: 0.08, green: 0.13, blue: 0.25))
+                .foregroundStyle(Color.primary)
             TextField("name@example.com", text: $model.appleId)
                 .font(.system(size: 17))
                 .keyboardType(.emailAddress)
@@ -120,10 +119,10 @@ struct AppleSigningView: View {
         }
         .padding(.horizontal, 22)
         .frame(height: 86)
-        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 25, style: .continuous))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 25, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 25, style: .continuous)
-                .stroke(.white.opacity(0.95), lineWidth: 1)
+                .stroke(Color(uiColor: .separator).opacity(0.35), lineWidth: 1)
         }
     }
 
@@ -131,7 +130,7 @@ struct AppleSigningView: View {
         VStack(alignment: .leading, spacing: 7) {
             Text("Password")
                 .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(Color(red: 0.08, green: 0.13, blue: 0.25))
+                .foregroundStyle(Color.primary)
             HStack(spacing: 10) {
                 Group {
                     if isPasswordVisible {
@@ -160,10 +159,10 @@ struct AppleSigningView: View {
         }
         .padding(.horizontal, 22)
         .frame(height: 86)
-        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 25, style: .continuous))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 25, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 25, style: .continuous)
-                .stroke(.white.opacity(0.95), lineWidth: 1)
+                .stroke(Color(uiColor: .separator).opacity(0.35), lineWidth: 1)
         }
     }
 
@@ -210,7 +209,7 @@ struct AppleSigningView: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 25, style: .continuous))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 25, style: .continuous))
     }
 
     private func statusRow(_ title: String, value: String) -> some View {
@@ -239,7 +238,7 @@ struct AppleSigningView: View {
         }
         .padding(8)
         .background(.ultraThinMaterial, in: Capsule())
-        .overlay { Capsule().stroke(.white.opacity(0.8), lineWidth: 1) }
+        .overlay { Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1) }
         .shadow(color: .black.opacity(0.08), radius: 14, y: 5)
     }
 
@@ -252,7 +251,7 @@ struct AppleSigningView: View {
             .foregroundStyle(selected ? Color.blue : Color.secondary)
             .frame(maxWidth: .infinity)
             .frame(height: 62)
-            .background { if selected { Capsule().fill(.white.opacity(0.65)) } }
+            .background { if selected { Capsule().fill(Color(uiColor: .tertiarySystemGroupedBackground)) } }
         }
         .buttonStyle(.plain)
         .disabled(selected)

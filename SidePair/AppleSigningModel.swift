@@ -164,6 +164,58 @@ final class AppleSigningModel: ObservableObject {
         #endif
     }
 
+    func signIPA(at ipaURL: URL, deviceName: String, deviceUDID: String) async throws -> URL {
+        #if SIGNING_BRIDGE
+        try prepareProtectedStorage()
+        guard let sessionJSON = try AppleSigningKeychain.load() else {
+            throw AppleSigningBridgeError.noSavedSession
+        }
+
+        let storagePath = Self.signingStorageURL().path
+        let sourcePath = ipaURL.path
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                var signedAppOutput: UnsafeMutablePointer<CChar>?
+                var errorOutput: UnsafeMutablePointer<CChar>?
+                let result = sessionJSON.withCString { sessionPointer in
+                    storagePath.withCString { storagePointer in
+                        sourcePath.withCString { sourcePointer in
+                            deviceName.withCString { deviceNamePointer in
+                                deviceUDID.withCString { deviceUDIDPointer in
+                                    sidepair_sign_ipa(
+                                        sessionPointer,
+                                        storagePointer,
+                                        sourcePointer,
+                                        deviceNamePointer,
+                                        deviceUDIDPointer,
+                                        &signedAppOutput,
+                                        &errorOutput
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let signedAppPath = signedAppOutput.map { String(cString: $0) }
+                let errorText = errorOutput.map { String(cString: $0) }
+                if let signedAppOutput { sidepair_signing_string_free(signedAppOutput) }
+                if let errorOutput { sidepair_signing_string_free(errorOutput) }
+
+                if result == 0, let signedAppPath {
+                    continuation.resume(returning: URL(fileURLWithPath: signedAppPath, isDirectory: true))
+                } else {
+                    continuation.resume(throwing: AppleSigningBridgeError.failed(
+                        errorText ?? "The IPA could not be signed with the saved Apple account."
+                    ))
+                }
+            }
+        }
+        #else
+        throw AppleSigningBridgeError.engineUnavailable
+        #endif
+    }
+
     func respondToTwoFactor(action: String, code: String? = nil, phoneId: UInt32? = nil) {
         var response: [String: Any] = ["action": action]
         if let code { response["code"] = code }
@@ -278,6 +330,23 @@ final class AppleSigningModel: ObservableObject {
     private static func signingStorageURL() -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("SidePairSigning", isDirectory: true)
+    }
+}
+
+private enum AppleSigningBridgeError: LocalizedError {
+    case engineUnavailable
+    case noSavedSession
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .engineUnavailable:
+            "This build does not include the Apple signing engine."
+        case .noSavedSession:
+            "Sign in with your Apple ID before signing an IPA."
+        case let .failed(message):
+            message
+        }
     }
 }
 
@@ -399,6 +468,17 @@ private func sidepair_sign_in(
     _ callbackContext: UnsafeMutableRawPointer?,
     _ outSessionJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
     _ outStatusJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
+    _ outError: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> Int32
+
+@_silgen_name("sidepair_sign_ipa")
+private func sidepair_sign_ipa(
+    _ sessionJSON: UnsafePointer<CChar>,
+    _ storageDirectory: UnsafePointer<CChar>,
+    _ ipaPath: UnsafePointer<CChar>,
+    _ deviceName: UnsafePointer<CChar>,
+    _ deviceUDID: UnsafePointer<CChar>,
+    _ outSignedAppPath: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
     _ outError: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
 ) -> Int32
 

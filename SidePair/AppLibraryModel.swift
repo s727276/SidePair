@@ -18,7 +18,7 @@ final class AppLibraryModel: ObservableObject {
         }
     }
 
-    func importIPA(from sourceURL: URL, connection: RSDConnectionModel) {
+    func importIPA(from sourceURL: URL, signing: AppleSigningModel, connection: RSDConnectionModel) {
         guard !isBusy else { return }
         errorMessage = nil
         progress = 0
@@ -40,10 +40,10 @@ final class AppLibraryModel: ObservableObject {
                 stageMessage = "IPA validated"
 
                 guard connection.isConnected else {
-                    stageMessage = "IPA added. Connect the device to install it."
+                    stageMessage = "IPA added. Connect the device to sign and install it."
                     return
                 }
-                try await install(prepared.metadata, connection: connection)
+                try await install(prepared.metadata, signing: signing, connection: connection)
             } catch {
                 stageMessage = nil
                 errorMessage = error.localizedDescription
@@ -51,7 +51,11 @@ final class AppLibraryModel: ObservableObject {
         }
     }
 
-    func install(_ app: IPAAppMetadata, connection: RSDConnectionModel) async throws {
+    func install(
+        _ app: IPAAppMetadata,
+        signing: AppleSigningModel,
+        connection: RSDConnectionModel
+    ) async throws {
         guard connection.isConnected else {
             errorMessage = "Connect the device through LocalDevVPN before installing."
             return
@@ -63,7 +67,7 @@ final class AppLibraryModel: ObservableObject {
         }
 
         errorMessage = nil
-        stageMessage = "Uploading to device…"
+        stageMessage = "Signing with your Apple ID…"
         progress = 0
         isBusy = true
         update(app, state: .installing, error: nil, installedAt: app.installedAt)
@@ -73,14 +77,31 @@ final class AppLibraryModel: ObservableObject {
         }
 
         do {
-            try await connection.installIPA(from: archiveURL) { [weak self] fraction, stage in
+            guard let deviceDetails = connection.deviceDetails,
+                  let deviceUDID = deviceDetails.udid,
+                  !deviceUDID.isEmpty else {
+                throw IPAAppLibraryError.missingDeviceIdentifier
+            }
+            let signedAppURL = try await signing.signIPA(
+                at: archiveURL,
+                deviceName: deviceDetails.name,
+                deviceUDID: deviceUDID
+            )
+            let extractionDirectory = signedAppURL.deletingLastPathComponent().deletingLastPathComponent()
+            defer { try? FileManager.default.removeItem(at: extractionDirectory) }
+
+            stageMessage = "Packaging signed IPA…"
+            let signedIPAURL = try IPAArchiveInspector.packageSignedApp(at: signedAppURL)
+            defer { try? FileManager.default.removeItem(at: signedIPAURL.deletingLastPathComponent()) }
+
+            try await connection.installIPA(from: signedIPAURL) { [weak self] fraction, stage in
                 guard let self else { return }
                 self.progress = fraction
                 self.stageMessage = stage
             }
             update(app, state: .installed, error: nil, installedAt: Date())
             progress = 1
-            stageMessage = "Installed"
+            stageMessage = "Signed and installed"
         } catch {
             update(app, state: .failed, error: error.localizedDescription, installedAt: app.installedAt)
             errorMessage = error.localizedDescription
@@ -114,5 +135,13 @@ final class AppLibraryModel: ObservableObject {
     private func persist() {
         guard let data = try? JSONEncoder().encode(apps) else { return }
         UserDefaults.standard.set(data, forKey: storageKey)
+    }
+}
+
+private enum IPAAppLibraryError: LocalizedError {
+    case missingDeviceIdentifier
+
+    var errorDescription: String? {
+        "Could not read this iPhone's device identifier over the Remote Pairing connection. Reconnect the device and try again."
     }
 }
