@@ -13,8 +13,6 @@ jobs:
   build-unsigned-ipa:
     name: Build unsigned iOS IPA
     runs-on: macos-26
-    env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/SigningBridgeTarget
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -25,7 +23,7 @@ jobs:
           targets: aarch64-apple-ios
 
       - name: Build Apple signing bridge
-        run: cargo build --manifest-path SigningBridge/Cargo.toml --release --target aarch64-apple-ios
+        run: CARGO_TARGET_DIR="$RUNNER_TEMP/SigningBridgeTarget" cargo build --manifest-path SigningBridge/Cargo.toml --release --target aarch64-apple-ios
 
       - name: Show Xcode version
         run: xcodebuild -version
@@ -35,7 +33,7 @@ jobs:
 
       - name: Build for iPhone without signing
         run: |
-          BRIDGE_LIB="$CARGO_TARGET_DIR/aarch64-apple-ios/release"
+          BRIDGE_LIB="$RUNNER_TEMP/SigningBridgeTarget/aarch64-apple-ios/release"
           xcodebuild \
             -project SidePair.xcodeproj \
             -scheme SidePair \
