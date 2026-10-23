@@ -12,7 +12,7 @@ use isideload::{
         cert_identity::CertificateIdentity,
     },
     util::{
-        callbacks::{MaxCertsCallbackBox, TwoFactorCallback},
+        callbacks::MaxCertsCallbackBox,
         fs_storage::FsStorage,
     },
 };
@@ -177,7 +177,7 @@ async fn sign_in(
         .as_ref()
         .and_then(|dictionary| dictionary.get("adsid"))
         .and_then(|value| value.as_string())
-        .cloned()
+        .map(str::to_string)
         .ok_or_else(|| "Apple sign-in did not provide an account session identifier".to_string())?;
 
     let mut developer_session = DeveloperSession::new(
@@ -389,18 +389,6 @@ fn make_status(
         profile_expiration,
         profile_error,
     }
-}
-
-fn initialize() -> Result<(), String> {
-    static INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
-    INIT_RESULT
-        .get_or_init(|| {
-            rustls::crypto::ring::default_provider()
-                .install_default()
-                .map_err(|_| "could not initialize the TLS provider".to_string())?;
-            isideload::init().map_err(|error| format!("could not initialize isideload: {error}"))
-        })
-        .clone()
 }
 
 fn ffi_string(value: String) -> *mut c_char {
