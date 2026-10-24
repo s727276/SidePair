@@ -1,12 +1,10 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct AppleSigningView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var model: AppleSigningModel
+    @ObservedObject var connection: RSDConnectionModel
     @State private var isPasswordVisible = false
-    @State private var showingSideStoreImportWarning = false
-    @State private var showingSideStoreImporter = false
 
     var body: some View {
         ScrollView {
@@ -19,10 +17,9 @@ struct AppleSigningView: View {
                 } else {
                     appleIDField
                     passwordField
+                    deviceRegistrationNote
                     continueButton
                 }
-
-                sideStoreImportButton
 
                 if let error = model.errorMessage {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -63,18 +60,6 @@ struct AppleSigningView: View {
                 model.cancelTwoFactor()
             }
         }
-        .alert("Import SideStore account?", isPresented: $showingSideStoreImportWarning) {
-            Button("Cancel", role: .cancel) {}
-            Button("Choose .sideconf") { showingSideStoreImporter = true }
-        } message: {
-            Text("Export the account from SideStore to Files first; iOS does not let SidePair read SideStore's private app storage or Keychain. The .sideconf contains your Apple ID password and certificate password and is Base64-encoded, not encrypted. Import only trusted files. SidePair uses the password to authenticate with Apple, then keeps the signing session in Keychain and the imported private key in protected app storage; it does not save the raw file or password.")
-        }
-        .fileImporter(
-            isPresented: $showingSideStoreImporter,
-            allowedContentTypes: [.data],
-            allowsMultipleSelection: false,
-            onCompletion: handleSideStoreImport
-        )
     }
 
     private var header: some View {
@@ -90,30 +75,29 @@ struct AppleSigningView: View {
         .padding(.horizontal, 8)
     }
 
-    private var sideStoreImportButton: some View {
-        Button {
-            showingSideStoreImportWarning = true
-        } label: {
-            Label("Import SideStore account file", systemImage: "doc.badge.arrow.up")
-                .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 13)
-                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .disabled(model.isWorking || !model.hasSigningBridge)
-    }
+    private var deviceRegistrationNote: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(
+                isReadyForDeviceRegistration ? "iPhone connected" : "Connect this iPhone first",
+                systemImage: isReadyForDeviceRegistration ? "checkmark.circle.fill" : "iphone.and.arrow.forward"
+            )
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(isReadyForDeviceRegistration ? Color.green : Color.orange)
 
-    private func handleSideStoreImport(_ result: Result<[URL], Error>) {
-        switch result {
-        case let .success(urls):
-            guard let url = urls.first else { return }
-            model.importSideStoreConfiguration(from: url)
-        case let .failure(error):
-            if (error as? CocoaError)?.code != .userCancelled {
-                model.reportImportError(error)
+            if let details = connection.deviceDetails {
+                Text("\(details.name) · \(details.model)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Connect through LocalDevVPN before continuing. SidePair registers this iPhone with Apple before requesting its app-specific provisioning profile.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .padding(15)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private var privacyCard: some View {
@@ -130,7 +114,7 @@ struct AppleSigningView: View {
                 .foregroundStyle(Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Your password is sent directly to Apple for authentication and is never stored by SidePair. The signing session and private key are protected on this iPhone; Anisette verification uses a remote provider.")
+            Text("Your password is sent directly to Apple for authentication and is never stored by SidePair. The signing session and development certificate are managed locally; Anisette verification uses a remote provider.")
                 .font(.caption)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -209,8 +193,22 @@ struct AppleSigningView: View {
         }
     }
 
+    private var isReadyForDeviceRegistration: Bool {
+        guard connection.isConnected,
+              let deviceUDID = connection.deviceDetails?.udid else { return false }
+        return !deviceUDID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var continueButton: some View {
-        Button(action: model.signIn) {
+        Button {
+            guard let details = connection.deviceDetails,
+                  let deviceUDID = details.udid,
+                  !deviceUDID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                model.reportError("Connect this iPhone through LocalDevVPN before signing in.")
+                return
+            }
+            model.signIn(deviceName: details.name, deviceUDID: deviceUDID)
+        } label: {
             HStack(spacing: 9) {
                 if model.isWorking { ProgressView().tint(.white) }
                 Text(model.isWorking ? "Signing in…" : "Continue")
@@ -223,7 +221,7 @@ struct AppleSigningView: View {
             .shadow(color: .blue.opacity(0.18), radius: 8, y: 4)
         }
         .buttonStyle(.plain)
-        .disabled(model.isWorking)
+        .disabled(model.isWorking || !isReadyForDeviceRegistration)
     }
 
     private func accountStatusCard(_ status: AppleSigningStatus) -> some View {

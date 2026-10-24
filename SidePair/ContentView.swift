@@ -40,7 +40,7 @@ struct ContentView: View {
                     .accessibilityLabel("App Library")
 
                     NavigationLink {
-                        AppleSigningView(model: signing)
+                        AppleSigningView(model: signing, connection: connection)
                     } label: {
                         Image(systemName: "person.badge.key.fill")
                     }

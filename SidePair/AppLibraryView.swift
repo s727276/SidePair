@@ -80,7 +80,7 @@ struct AppLibraryView: View {
                 .foregroundStyle(signing.status == nil ? .orange : .green)
                 Spacer()
                 NavigationLink {
-                    AppleSigningView(model: signing)
+                    AppleSigningView(model: signing, connection: connection)
                 } label: {
                     Text(signing.status == nil ? "Sign in" : "Manage")
                         .font(.subheadline.weight(.semibold))

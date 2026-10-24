@@ -37,85 +37,6 @@ struct AppleTwoFactorPrompt: Identifiable {
     let request: AppleTwoFactorRequest
 }
 
-private struct SideStoreAccountConfiguration: Decodable {
-    let email: String
-    let password: String
-    let certificate: Data
-    let certificatePassword: String
-
-    private enum CodingKeys: String, CodingKey {
-        case email
-        case appleIDEmailAddress
-        case appleID
-        case password
-        case appleIDPassword
-        case cert
-        case certificate
-        case signingCertificate
-        case certpass
-        case certificatePassword
-        case signingCertificatePassword
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        email = try values.decodeIfPresent(String.self, forKey: .email)
-            ?? values.decodeIfPresent(String.self, forKey: .appleIDEmailAddress)
-            ?? values.decode(String.self, forKey: .appleID)
-        password = try values.decodeIfPresent(String.self, forKey: .password)
-            ?? values.decode(String.self, forKey: .appleIDPassword)
-        certificate = try values.decodeIfPresent(Data.self, forKey: .cert)
-            ?? values.decodeIfPresent(Data.self, forKey: .certificate)
-            ?? values.decode(Data.self, forKey: .signingCertificate)
-        certificatePassword = try values.decodeIfPresent(String.self, forKey: .certpass)
-            ?? values.decodeIfPresent(String.self, forKey: .certificatePassword)
-            ?? values.decodeIfPresent(String.self, forKey: .signingCertificatePassword)
-            ?? ""
-    }
-
-    static func decode(_ fileData: Data) throws -> Self {
-        guard fileData.count <= 10 * 1024 * 1024 else {
-            throw AppleSigningImportError.configurationTooLarge
-        }
-
-        var candidates = [fileData]
-        if let decoded = Data(base64Encoded: fileData, options: .ignoreUnknownCharacters) {
-            candidates.insert(decoded, at: 0)
-            if let nestedText = String(data: decoded, encoding: .utf8),
-               let nested = Data(base64Encoded: nestedText, options: .ignoreUnknownCharacters) {
-                candidates.insert(nested, at: 0)
-            }
-        }
-
-        for candidate in candidates {
-            if let configuration = try? JSONDecoder().decode(Self.self, from: candidate) {
-                return configuration
-            }
-            if let configuration = try? PropertyListDecoder().decode(Self.self, from: candidate) {
-                return configuration
-            }
-        }
-        throw AppleSigningImportError.invalidSideStoreConfiguration
-    }
-}
-
-private enum AppleSigningImportError: LocalizedError {
-    case invalidSideStoreConfiguration
-    case unsupportedFileType
-    case configurationTooLarge
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidSideStoreConfiguration:
-            "This file is not a supported SideStore account export. Choose the .sideconf file created by SideStore's Export Account command."
-        case .unsupportedFileType:
-            "Choose the .sideconf file exported by SideStore."
-        case .configurationTooLarge:
-            "The SideStore configuration file is unexpectedly large."
-        }
-    }
-}
-
 @MainActor
 final class AppleSigningModel: ObservableObject {
     @Published var appleId = ""
@@ -148,7 +69,7 @@ final class AppleSigningModel: ObservableObject {
         }
     }
 
-    func signIn() {
+    func signIn(deviceName: String, deviceUDID: String) {
         guard !isWorking else { return }
         guard hasSigningBridge else {
             errorMessage = "This build does not include the Apple signing engine. No credentials were sent or saved."
@@ -161,49 +82,29 @@ final class AppleSigningModel: ObservableObject {
             errorMessage = "Enter a valid Apple ID and password."
             return
         }
-        authenticate(account: account, password: password, sideStoreCertificate: nil)
-    }
-
-    func reportImportError(_ error: Error) {
-        errorMessage = error.localizedDescription
-    }
-
-    func importSideStoreConfiguration(from fileURL: URL) {
-        guard !isWorking else { return }
-        guard hasSigningBridge else {
-            errorMessage = "This build does not include the Apple signing engine."
+        guard !deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !deviceUDID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            errorMessage = "Connect this iPhone through LocalDevVPN before signing in so Apple can register it for the provisioning profile."
             return
         }
 
-        let hasSecurityScope = fileURL.startAccessingSecurityScopedResource()
-        defer {
-            if hasSecurityScope { fileURL.stopAccessingSecurityScopedResource() }
-        }
+        authenticate(
+            account: account,
+            password: password,
+            deviceName: deviceName,
+            deviceUDID: deviceUDID
+        )
+    }
 
-        do {
-            guard fileURL.pathExtension.lowercased() == "sideconf" else {
-                throw AppleSigningImportError.unsupportedFileType
-            }
-            let fileData = try Data(contentsOf: fileURL)
-            let imported = try SideStoreAccountConfiguration.decode(fileData)
-            guard imported.email.contains("@"), !imported.password.isEmpty, !imported.certificate.isEmpty else {
-                throw AppleSigningImportError.invalidSideStoreConfiguration
-            }
-            appleId = imported.email
-            authenticate(
-                account: imported.email,
-                password: imported.password,
-                sideStoreCertificate: imported
-            )
-        } catch {
-            errorMessage = "Could not import this SideStore configuration: \(error.localizedDescription)"
-        }
+    func reportError(_ message: String) {
+        errorMessage = message
     }
 
     private func authenticate(
         account: String,
         password: String,
-        sideStoreCertificate: SideStoreAccountConfiguration?
+        deviceName: String,
+        deviceUDID: String
     ) {
         do {
             try prepareProtectedStorage()
@@ -240,7 +141,8 @@ final class AppleSigningModel: ObservableObject {
                 password: suppliedPassword,
                 storagePath: storagePath,
                 bundleID: bundleID,
-                certificate: sideStoreCertificate,
+                deviceName: deviceName,
+                deviceUDID: deviceUDID,
                 callbackContext: retainedContext,
                 outSessionJSON: &sessionOutput,
                 outStatusJSON: &statusOutput,
@@ -579,22 +481,8 @@ private func sidepair_sign_in(
     _ password: UnsafePointer<CChar>,
     _ storageDirectory: UnsafePointer<CChar>,
     _ bundleID: UnsafePointer<CChar>,
-    _ twoFactorCallback: SigningTwoFactorCallback?,
-    _ callbackContext: UnsafeMutableRawPointer?,
-    _ outSessionJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
-    _ outStatusJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
-    _ outError: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
-) -> Int32
-
-@_silgen_name("sidepair_sign_in_with_p12")
-private func sidepair_sign_in_with_p12(
-    _ appleID: UnsafePointer<CChar>,
-    _ password: UnsafePointer<CChar>,
-    _ storageDirectory: UnsafePointer<CChar>,
-    _ bundleID: UnsafePointer<CChar>,
-    _ p12Data: UnsafePointer<UInt8>,
-    _ p12Length: UInt,
-    _ p12Password: UnsafePointer<CChar>,
+    _ deviceName: UnsafePointer<CChar>,
+    _ deviceUDID: UnsafePointer<CChar>,
     _ twoFactorCallback: SigningTwoFactorCallback?,
     _ callbackContext: UnsafeMutableRawPointer?,
     _ outSessionJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
@@ -634,7 +522,8 @@ private func invokeAppleSignIn(
     password: String,
     storagePath: String,
     bundleID: String,
-    certificate: SideStoreAccountConfiguration?,
+    deviceName: String,
+    deviceUDID: String,
     callbackContext: UnsafeMutableRawPointer,
     outSessionJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
     outStatusJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
@@ -648,38 +537,18 @@ private func invokeAppleSignIn(
     defer { free(storagePointer) }
     guard let bundlePointer = duplicateCString(bundleID) else { return -1 }
     defer { free(bundlePointer) }
-
-    if let certificate {
-        guard let certificatePasswordPointer = duplicateCString(certificate.certificatePassword) else {
-            return -1
-        }
-        defer { free(certificatePasswordPointer) }
-        return certificate.certificate.withUnsafeBytes { bytes in
-            guard let certificatePointer = bytes.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
-                return -1
-            }
-            return sidepair_sign_in_with_p12(
-                accountPointer,
-                passwordPointer,
-                storagePointer,
-                bundlePointer,
-                certificatePointer,
-                UInt(bytes.count),
-                certificatePasswordPointer,
-                signingTwoFactorCallback,
-                callbackContext,
-                outSessionJSON,
-                outStatusJSON,
-                outError
-            )
-        }
-    }
+    guard let deviceNamePointer = duplicateCString(deviceName) else { return -1 }
+    defer { free(deviceNamePointer) }
+    guard let deviceUDIDPointer = duplicateCString(deviceUDID) else { return -1 }
+    defer { free(deviceUDIDPointer) }
 
     return sidepair_sign_in(
         accountPointer,
         passwordPointer,
         storagePointer,
         bundlePointer,
+        deviceNamePointer,
+        deviceUDIDPointer,
         signingTwoFactorCallback,
         callbackContext,
         outSessionJSON,

@@ -18,22 +18,16 @@ use isideload::{
     util::{
         callbacks::{ExtensionsBehaviorCallbackBox, MaxCertsCallbackBox},
         fs_storage::FsStorage,
-        storage::SideloadingStorage,
     },
 };
-use p12_keystore::{KeyStore, Pkcs12ImportPolicy};
 use rootcause::prelude::*;
-use rsa::{RsaPrivateKey, pkcs1::EncodeRsaPublicKey, pkcs8::DecodePrivateKey};
-use x509_cert::der::Decode;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     ffi::{CStr, CString, c_char, c_void},
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
     ptr,
-    slice,
     sync::OnceLock,
 };
 use zeroize::Zeroizing;
@@ -170,79 +164,15 @@ fn make_two_factor_callback(
     })
 }
 
-async fn import_side_store_certificate(
-    p12_data: &[u8],
-    p12_password: &str,
-    apple_id: &str,
-    developer_session: &mut DeveloperSession,
-    team: &DeveloperTeam,
-    storage: &FsStorage,
-) -> Result<String, String> {
-    let keystore = KeyStore::from_pkcs12(p12_data, p12_password, Pkcs12ImportPolicy::Strict)
-        .map_err(|error| format!("could not read SideStore certificate: {error}"))?;
-    let (key_der, certificate_der) = {
-        let (_, chain) = keystore
-            .private_key_chain()
-            .ok_or_else(|| "SideStore configuration contains no certificate private key".to_string())?;
-        let certificate = chain
-            .certs()
-            .first()
-            .ok_or_else(|| "SideStore certificate has no signing certificate".to_string())?;
-        (chain.key().as_der().to_vec(), certificate.as_der().to_vec())
-    };
-    let imported_private_key = RsaPrivateKey::from_pkcs8_der(&key_der)
-        .map_err(|error| format!("could not decode the SideStore private key: {error}"))?;
-    let private_public_key = imported_private_key
-        .to_public_key()
-        .to_pkcs1_der()
-        .map_err(|error| format!("could not read the SideStore public key: {error}"))?;
-    let imported_certificate = x509_cert::Certificate::from_der(&certificate_der)
-        .map_err(|error| format!("could not decode the SideStore signing certificate: {error}"))?;
-    let certificate_public_key = imported_certificate
-        .tbs_certificate
-        .subject_public_key_info
-        .subject_public_key
-        .as_bytes()
-        .ok_or_else(|| "SideStore certificate has no public key".to_string())?;
-    if private_public_key.as_bytes() != certificate_public_key {
-        return Err("the SideStore certificate does not match its private key".to_string());
-    }
-
-    let matching_certificate = developer_session
-        .list_ios_certs(team)
-        .await
-        .map_err(|error| format!("could not verify the imported certificate with Apple: {error}"))?
-        .into_iter()
-        .find(|certificate| {
-            certificate
-                .cert_content
-                .as_ref()
-                .is_some_and(|contents| contents.as_ref() == certificate_der.as_slice())
-        })
-        .ok_or_else(|| "the imported certificate is not active on this Apple developer account".to_string())?;
-    if matching_certificate.machine_id.is_none() {
-        return Err("Apple's imported certificate record is missing its machine ID".to_string());
-    }
-    let machine_name = matching_certificate.machine_name.unwrap_or_default();
-
-    let mut email_hasher = Sha256::new();
-    email_hasher.update(apple_id.as_bytes());
-    let email_hash = hex::encode(email_hasher.finalize());
-    storage
-        .store_data(&format!("{email_hash}/key"), &key_der)
-        .map_err(|error| format!("could not securely store the imported signing key: {error}"))?;
-
-    Ok(machine_name)
-}
-
 async fn sign_in(
     apple_id: String,
     password: Zeroizing<String>,
     storage_dir: PathBuf,
     bundle_id: String,
+    device_name: String,
+    device_udid: String,
     callback: SigningTwoFactorCallback,
     callback_context: *mut c_void,
-    imported_p12: Option<(Vec<u8>, Zeroizing<String>)>,
 ) -> Result<(String, SigningStatus), String> {
     let anisette_provider = create_anisette_provider(&storage_dir)?;
     let mut account = AppleAccount::builder(&apple_id)
@@ -273,21 +203,12 @@ async fn sign_in(
         account.anisette_generator.clone(),
     );
     let team = select_team(&mut developer_session).await?;
+    developer_session
+        .ensure_device_registered(&team, &device_name, &device_udid, None)
+        .await
+        .map_err(|error| format!("could not register this iPhone for development signing: {error}"))?;
     let storage = FsStorage::new(storage_dir.clone());
-    let certificate_machine_name = match imported_p12 {
-        Some((p12_data, p12_password)) => {
-            import_side_store_certificate(
-                &p12_data,
-                p12_password.as_str(),
-                &apple_id,
-                &mut developer_session,
-                &team,
-                &storage,
-            )
-            .await?
-        }
-        None => "SidePair".to_string(),
-    };
+    let certificate_machine_name = "SidePair".to_string();
     let cert_behavior: MaxCertsBehavior<MaxCertsCallbackBox> = MaxCertsBehavior::Error;
     let identity = CertificateIdentity::retrieve(
         &certificate_machine_name,
@@ -298,7 +219,7 @@ async fn sign_in(
         &cert_behavior,
     )
     .await
-    .map_err(|error| format!("could not create or select a development certificate: {error}"))?;
+    .map_err(|error| format!("could not create or select the Apple Development certificate: {error}"))?;
 
     let certificate = developer_session
         .list_ios_certs(&team)
@@ -492,6 +413,22 @@ async fn select_team(developer_session: &mut DeveloperSession) -> Result<Develop
         .ok_or_else(|| "no Apple developer team is available for this account".to_string())
 }
 
+// SideStore can leave its previous signing team's suffix on the installed bundle ID.
+fn team_scoped_bundle_identifier(bundle_id: &str, team_id: &str) -> String {
+    let mut components: Vec<&str> = bundle_id.split('.').collect();
+    if components.len() > 2
+        && components.last().is_some_and(|suffix| {
+            suffix.len() == 10
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        })
+    {
+        components.truncate(components.len() - 1);
+    }
+    format!("{}.{}", components.join("."), team_id)
+}
+
 async fn provision_profile(
     developer_session: &mut DeveloperSession,
     team: &DeveloperTeam,
@@ -499,16 +436,25 @@ async fn provision_profile(
     storage_dir: &Path,
 ) -> (String, String, String, String) {
     let result = async {
+        let profile_bundle_id = team_scoped_bundle_identifier(bundle_id, &team.team_id);
         let app_ids = developer_session
             .list_app_ids(team, DeveloperDeviceType::Ios)
             .await
             .map_err(|error| format!("could not list App IDs: {error}"))?;
-        let app_id = match app_ids.app_ids.into_iter().find(|app_id| app_id.identifier == bundle_id) {
+        let app_id = match app_ids
+            .app_ids
+            .into_iter()
+            .find(|app_id| app_id.identifier == profile_bundle_id)
+        {
             Some(app_id) => app_id,
             None => developer_session
-                .add_app_id(team, "SidePair", bundle_id, DeveloperDeviceType::Ios)
+                .add_app_id(team, "SidePair", &profile_bundle_id, DeveloperDeviceType::Ios)
                 .await
-                .map_err(|error| format!("could not register SidePair's App ID: {error}"))?,
+                .map_err(|error| {
+                    format!(
+                        "could not register SidePair's team-specific App ID '{profile_bundle_id}': {error}"
+                    )
+                })?,
         };
         let profile = developer_session
             .download_team_provisioning_profile(team, &app_id, DeveloperDeviceType::Ios)
@@ -518,7 +464,7 @@ async fn provision_profile(
         let directory = storage_dir.join("profiles");
         std::fs::create_dir_all(&directory)
             .map_err(|error| format!("could not create the profile storage directory: {error}"))?;
-        let path = directory.join(format!("{bundle_id}.mobileprovision"));
+        let path = directory.join(format!("{profile_bundle_id}.mobileprovision"));
         let temporary_path = path.with_extension("mobileprovision.tmp");
         std::fs::write(&temporary_path, profile.encoded_profile.as_ref())
             .map_err(|error| format!("could not save the provisioning profile: {error}"))?;
@@ -595,9 +541,10 @@ fn run_sign_in(
     password: Zeroizing<String>,
     storage_dir: PathBuf,
     bundle_id: String,
+    device_name: String,
+    device_udid: String,
     callback: SigningTwoFactorCallback,
     callback_context: *mut c_void,
-    imported_p12: Option<(Vec<u8>, Zeroizing<String>)>,
 ) -> Result<(String, SigningStatus), String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -608,9 +555,10 @@ fn run_sign_in(
         password,
         storage_dir,
         bundle_id,
+        device_name,
+        device_udid,
         callback,
         callback_context,
-        imported_p12,
     ))
 }
 
@@ -640,6 +588,8 @@ pub unsafe extern "C" fn sidepair_sign_in(
     password: *const c_char,
     storage_dir: *const c_char,
     bundle_id: *const c_char,
+    device_name: *const c_char,
+    device_udid: *const c_char,
     callback: SigningTwoFactorCallback,
     callback_context: *mut c_void,
     out_session_json: *mut *mut c_char,
@@ -661,71 +611,17 @@ pub unsafe extern "C" fn sidepair_sign_in(
         let password = Zeroizing::new(unsafe { read_string(password, "Apple ID password") }?);
         let storage_dir = PathBuf::from(unsafe { read_string(storage_dir, "storage directory") }?);
         let bundle_id = unsafe { read_string(bundle_id, "bundle identifier") }?;
-        run_sign_in(apple_id, password, storage_dir, bundle_id, callback, callback_context, None)
-    }));
-
-    match result {
-        Ok(Ok((session_json, status))) => {
-            unsafe {
-                write_out(out_session_json, session_json);
-                write_out(out_status_json, serde_json::to_string(&status).unwrap_or_default());
-            }
-            0
-        }
-        Ok(Err(error)) => {
-            unsafe { write_out(out_error, error) };
-            1
-        }
-        Err(_) => {
-            unsafe { write_out(out_error, "unexpected panic in signing bridge".to_string()) };
-            2
-        }
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sidepair_sign_in_with_p12(
-    apple_id: *const c_char,
-    password: *const c_char,
-    storage_dir: *const c_char,
-    bundle_id: *const c_char,
-    p12_data: *const u8,
-    p12_length: usize,
-    p12_password: *const c_char,
-    callback: SigningTwoFactorCallback,
-    callback_context: *mut c_void,
-    out_session_json: *mut *mut c_char,
-    out_status_json: *mut *mut c_char,
-    out_error: *mut *mut c_char,
-) -> i32 {
-    if out_session_json.is_null() || out_status_json.is_null() || out_error.is_null() {
-        return 2;
-    }
-    unsafe {
-        *out_session_json = ptr::null_mut();
-        *out_status_json = ptr::null_mut();
-        *out_error = ptr::null_mut();
-    }
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        initialize()?;
-        if p12_data.is_null() || p12_length == 0 || p12_length > 10 * 1024 * 1024 {
-            return Err("SideStore certificate data is missing or too large".to_string());
-        }
-        let apple_id = unsafe { read_string(apple_id, "Apple ID") }?;
-        let password = Zeroizing::new(unsafe { read_string(password, "Apple ID password") }?);
-        let storage_dir = PathBuf::from(unsafe { read_string(storage_dir, "storage directory") }?);
-        let bundle_id = unsafe { read_string(bundle_id, "bundle identifier") }?;
-        let p12_password = Zeroizing::new(unsafe { read_string(p12_password, "certificate password") }?);
-        let p12_data = unsafe { slice::from_raw_parts(p12_data, p12_length) }.to_vec();
+        let device_name = unsafe { read_string(device_name, "device name") }?;
+        let device_udid = unsafe { read_string(device_udid, "device identifier") }?;
         run_sign_in(
             apple_id,
             password,
             storage_dir,
             bundle_id,
+            device_name,
+            device_udid,
             callback,
             callback_context,
-            Some((p12_data, p12_password)),
         )
     }));
 
@@ -742,7 +638,7 @@ pub unsafe extern "C" fn sidepair_sign_in_with_p12(
             1
         }
         Err(_) => {
-            unsafe { write_out(out_error, "unexpected panic while importing SideStore credentials".to_string()) };
+            unsafe { write_out(out_error, "unexpected panic in signing bridge".to_string()) };
             2
         }
     }
