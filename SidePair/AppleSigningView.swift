@@ -67,11 +67,11 @@ struct AppleSigningView: View {
             Button("Cancel", role: .cancel) {}
             Button("Choose .sideconf") { showingSideStoreImporter = true }
         } message: {
-            Text("SideStore .sideconf files contain your Apple ID password and certificate password. They are Base64-encoded, not encrypted. Only import trusted files. SidePair uses the password to authenticate with Apple, then keeps the signing session in Keychain and the imported private key in protected app storage; it does not save the raw file or password.")
+            Text("Export the account from SideStore to Files first; iOS does not let SidePair read SideStore's private app storage or Keychain. The .sideconf contains your Apple ID password and certificate password and is Base64-encoded, not encrypted. Import only trusted files. SidePair uses the password to authenticate with Apple, then keeps the signing session in Keychain and the imported private key in protected app storage; it does not save the raw file or password.")
         }
         .fileImporter(
             isPresented: $showingSideStoreImporter,
-            allowedContentTypes: [sideStoreConfigurationType],
+            allowedContentTypes: [.data],
             allowsMultipleSelection: false,
             onCompletion: handleSideStoreImport
         )
@@ -102,10 +102,6 @@ struct AppleSigningView: View {
         }
         .buttonStyle(.plain)
         .disabled(model.isWorking || !model.hasSigningBridge)
-    }
-
-    private var sideStoreConfigurationType: UTType {
-        UTType(filenameExtension: "sideconf", conformingTo: .data) ?? .data
     }
 
     private func handleSideStoreImport(_ result: Result<[URL], Error>) {

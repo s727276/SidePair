@@ -61,12 +61,15 @@ private struct SideStoreAccountConfiguration: Decodable {
 
 private enum AppleSigningImportError: LocalizedError {
     case invalidSideStoreConfiguration
+    case unsupportedFileType
     case configurationTooLarge
 
     var errorDescription: String? {
         switch self {
         case .invalidSideStoreConfiguration:
             "The configuration is missing a valid Apple ID, password, or certificate."
+        case .unsupportedFileType:
+            "Choose the .sideconf file exported by SideStore."
         case .configurationTooLarge:
             "The SideStore configuration file is unexpectedly large."
         }
@@ -138,6 +141,9 @@ final class AppleSigningModel: ObservableObject {
         }
 
         do {
+            guard fileURL.pathExtension.lowercased() == "sideconf" else {
+                throw AppleSigningImportError.unsupportedFileType
+            }
             let fileData = try Data(contentsOf: fileURL)
             let imported = try SideStoreAccountConfiguration.decode(fileData)
             guard imported.email.contains("@"), !imported.password.isEmpty, !imported.certificate.isEmpty else {
