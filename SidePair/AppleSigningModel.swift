@@ -37,6 +37,31 @@ struct AppleTwoFactorPrompt: Identifiable {
     let request: AppleTwoFactorRequest
 }
 
+struct AppleDevelopmentCertificateOption: Decodable, Identifiable, Sendable {
+    let serialNumber: String
+    let name: String
+    let certificateType: String
+    let status: String
+    let expiration: String
+
+    var id: String { serialNumber }
+}
+
+struct AppleCertificateRecoveryInfo: Decodable, Sendable {
+    let message: String
+    let certificates: [AppleDevelopmentCertificateOption]
+}
+
+struct AppleCertificateRecoveryPrompt: Identifiable, Sendable {
+    let id = UUID()
+    let sessionJSON: String
+    let storagePath: String
+    let bundleID: String
+    let deviceName: String
+    let deviceUDID: String
+    let info: AppleCertificateRecoveryInfo
+}
+
 @MainActor
 final class AppleSigningModel: ObservableObject {
     @Published var appleId = ""
@@ -45,6 +70,7 @@ final class AppleSigningModel: ObservableObject {
     @Published private(set) var isWorking = false
     @Published private(set) var errorMessage: String?
     @Published var twoFactorPrompt: AppleTwoFactorPrompt?
+    @Published var certificateRecoveryPrompt: AppleCertificateRecoveryPrompt?
 
     private var twoFactorReply: ((String?) -> Void)?
     private var restoreStarted = false
@@ -100,6 +126,65 @@ final class AppleSigningModel: ObservableObject {
         errorMessage = message
     }
 
+    func cancelCertificateRecovery() {
+        guard !isWorking else { return }
+        certificateRecoveryPrompt = nil
+        errorMessage = "Sign-in stopped. AquaSign did not revoke any certificate."
+    }
+
+    func revokeAndRetryCertificate(serialNumber: String) {
+        guard !isWorking,
+              let prompt = certificateRecoveryPrompt,
+              prompt.info.certificates.contains(where: { $0.serialNumber == serialNumber }) else { return }
+        isWorking = true
+        errorMessage = nil
+
+        #if SIGNING_BRIDGE
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var sessionOutput: UnsafeMutablePointer<CChar>?
+            var statusOutput: UnsafeMutablePointer<CChar>?
+            var errorOutput: UnsafeMutablePointer<CChar>?
+            let result = invokeRevokeAndRetryCertificate(
+                prompt: prompt,
+                serialNumber: serialNumber,
+                outSessionJSON: &sessionOutput,
+                outStatusJSON: &statusOutput,
+                outError: &errorOutput
+            )
+            let sessionJSON = sessionOutput.map { String(cString: $0) }
+            let statusJSON = statusOutput.map { String(cString: $0) }
+            let errorText = errorOutput.map { String(cString: $0) }
+            if let sessionOutput { sidepair_signing_string_free(sessionOutput) }
+            if let statusOutput { sidepair_signing_string_free(statusOutput) }
+            if let errorOutput { sidepair_signing_string_free(errorOutput) }
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isWorking = false
+                self.certificateRecoveryPrompt = nil
+                if result == 0, let sessionJSON, let statusJSON,
+                   let statusData = statusJSON.data(using: .utf8),
+                   let signingStatus = try? JSONDecoder().decode(AppleSigningStatus.self, from: statusData) {
+                    do {
+                        try AppleSigningKeychain.save(sessionJSON)
+                        self.appleId = signingStatus.appleId
+                        self.status = signingStatus
+                        self.errorMessage = signingStatus.profileError.isEmpty ? nil : signingStatus.profileError
+                    } catch {
+                        self.errorMessage = "The replacement certificate was created, but the session could not be saved securely: \(error.localizedDescription)"
+                    }
+                } else {
+                    self.errorMessage = errorText ?? "Certificate recovery failed (\(result)). AquaSign did not attempt another revocation."
+                }
+            }
+        }
+        #else
+        isWorking = false
+        certificateRecoveryPrompt = nil
+        errorMessage = "This build does not include the Apple signing engine. No certificate was revoked."
+        #endif
+    }
+
     private func authenticate(
         account: String,
         password: String,
@@ -118,6 +203,7 @@ final class AppleSigningModel: ObservableObject {
         self.password = ""
         errorMessage = nil
         status = nil
+        certificateRecoveryPrompt = nil
         isWorking = true
 
         #if SIGNING_BRIDGE
@@ -162,9 +248,21 @@ final class AppleSigningModel: ObservableObject {
                 self.isWorking = false
                 self.twoFactorPrompt = nil
                 self.twoFactorReply = nil
-                if result == 0, let sessionJSON, let statusJSON,
-                   let statusData = statusJSON.data(using: .utf8),
-                   let signingStatus = try? JSONDecoder().decode(AppleSigningStatus.self, from: statusData) {
+                if result == 3, let sessionJSON, let statusJSON,
+                   let recoveryData = statusJSON.data(using: .utf8),
+                   let recoveryInfo = try? JSONDecoder().decode(AppleCertificateRecoveryInfo.self, from: recoveryData) {
+                    self.certificateRecoveryPrompt = AppleCertificateRecoveryPrompt(
+                        sessionJSON: sessionJSON,
+                        storagePath: storagePath,
+                        bundleID: bundleID,
+                        deviceName: deviceName,
+                        deviceUDID: deviceUDID,
+                        info: recoveryInfo
+                    )
+                    self.errorMessage = nil
+                } else if result == 0, let sessionJSON, let statusJSON,
+                          let statusData = statusJSON.data(using: .utf8),
+                          let signingStatus = try? JSONDecoder().decode(AppleSigningStatus.self, from: statusData) {
                     do {
                         try AppleSigningKeychain.save(sessionJSON)
                         self.appleId = account
@@ -490,6 +588,18 @@ private func sidepair_sign_in(
     _ outError: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
 ) -> Int32
 
+@_silgen_name("sidepair_revoke_and_retry_development_certificate")
+private func sidepair_revoke_and_retry_development_certificate(
+    _ sessionJSON: UnsafePointer<CChar>,
+    _ storageDirectory: UnsafePointer<CChar>,
+    _ bundleID: UnsafePointer<CChar>,
+    _ deviceName: UnsafePointer<CChar>,
+    _ deviceUDID: UnsafePointer<CChar>,
+    _ certificateSerial: UnsafePointer<CChar>,
+    _ outSessionJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
+    _ outStatusJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
+    _ outError: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> Int32
 @_silgen_name("sidepair_sign_ipa")
 private func sidepair_sign_ipa(
     _ sessionJSON: UnsafePointer<CChar>,
@@ -555,6 +665,38 @@ private func invokeAppleSignIn(
         outStatusJSON,
         outError
     )
+}
+
+private func invokeRevokeAndRetryCertificate(
+    prompt: AppleCertificateRecoveryPrompt,
+    serialNumber: String,
+    outSessionJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
+    outStatusJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
+    outError: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> Int32 {
+    prompt.sessionJSON.withCString { sessionPointer in
+        prompt.storagePath.withCString { storagePointer in
+            prompt.bundleID.withCString { bundlePointer in
+                prompt.deviceName.withCString { deviceNamePointer in
+                    prompt.deviceUDID.withCString { deviceUDIDPointer in
+                        serialNumber.withCString { serialPointer in
+                            sidepair_revoke_and_retry_development_certificate(
+                                sessionPointer,
+                                storagePointer,
+                                bundlePointer,
+                                deviceNamePointer,
+                                deviceUDIDPointer,
+                                serialPointer,
+                                outSessionJSON,
+                                outStatusJSON,
+                                outError
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 private let signingTwoFactorCallback: SigningTwoFactorCallback = { context, requestJSON, responseJSON, responseCapacity in

@@ -60,6 +60,18 @@ struct AppleSigningView: View {
                 model.cancelTwoFactor()
             }
         }
+        .sheet(item: $model.certificateRecoveryPrompt) { prompt in
+            CertificateRecoveryView(
+                prompt: prompt,
+                isWorking: model.isWorking,
+                onRevoke: { serialNumber in
+                    model.revokeAndRetryCertificate(serialNumber: serialNumber)
+                },
+                onCancel: {
+                    model.cancelCertificateRecovery()
+                }
+            )
+        }
     }
 
     private var header: some View {
@@ -370,3 +382,144 @@ private struct TwoFactorChallengeView: View {
         .presentationDetents([.medium, .large])
     }
 }
+
+
+
+private struct CertificateRecoveryView: View {
+    let prompt: AppleCertificateRecoveryPrompt
+    let isWorking: Bool
+    let onRevoke: (String) -> Void
+    let onCancel: () -> Void
+    @State private var selectedSerial: String?
+    @State private var showingConfirmation = false
+
+    private var selectedCertificate: AppleDevelopmentCertificateOption? {
+        prompt.info.certificates.first { $0.serialNumber == selectedSerial }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Label("Certificate recovery", systemImage: "exclamationmark.triangle.fill")
+                        .font(.headline)
+                        .foregroundStyle(.orange)
+
+                    Text(prompt.info.message)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text("Error 7460 can mean an active certificate or a pending request; revoking an active certificate may not clear a pending request. Revocation invalidates profiles that include the certificate, and affected apps may need to be re-signed and reinstalled. It cannot be undone.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                    if prompt.info.certificates.isEmpty {
+                        Label("No active iOS Development certificates are available to revoke.", systemImage: "info.circle")
+                            .font(.subheadline.weight(.medium))
+                        Text("Error 7460 can also mean a certificate request is pending. AquaSign cannot revoke a pending request. Check your Apple Developer account or contact Apple Developer Support; no certificate has been changed.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Choose an active development certificate")
+                            .font(.subheadline.weight(.semibold))
+
+                        ForEach(prompt.info.certificates) { certificate in
+                            certificateRow(certificate)
+                        }
+
+                        Button {
+                            showingConfirmation = true
+                        } label: {
+                            HStack(spacing: 9) {
+                                if isWorking { ProgressView().tint(.white) }
+                                Text(isWorking ? "Revoking and retrying…" : "Review revocation")
+                                    .fontWeight(.semibold)
+                            }
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(Color.red, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isWorking || selectedSerial == nil)
+                    }
+                }
+                .padding(24)
+            }
+            .navigationTitle("Resolve certificate issue")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                        .disabled(isWorking)
+                }
+            }
+            .confirmationDialog(
+                "Revoke the selected certificate?",
+                isPresented: $showingConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Revoke and retry once", role: .destructive) {
+                    guard let selectedSerial else { return }
+                    onRevoke(selectedSerial)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                if let selectedCertificate {
+                    Text("Revoke \(selectedCertificate.name)? Profiles containing it will become invalid. If a pending request caused error 7460, this may not resolve it. AquaSign will retry once and will not revoke another certificate automatically.")
+                }
+            }
+        }
+        .interactiveDismissDisabled()
+        .presentationDetents([.medium, .large])
+    }
+
+    private func certificateRow(_ certificate: AppleDevelopmentCertificateOption) -> some View {
+        let isSelected = selectedSerial == certificate.serialNumber
+        return Button {
+            selectedSerial = certificate.serialNumber
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(isSelected ? Color.blue : Color.secondary)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(certificate.name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text("\(certificate.certificateType) · \(certificate.status)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if !certificate.expiration.isEmpty {
+                        Text("Expires \(certificate.expiration)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("Serial · \(certificate.serialNumber)")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .stroke(isSelected ? Color.blue : Color(uiColor: .separator).opacity(0.35), lineWidth: isSelected ? 1.5 : 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isWorking)
+    }
+}
+
+
+
+

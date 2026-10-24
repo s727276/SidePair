@@ -1,4 +1,5 @@
 use isideload::{
+    SideloadError,
     anisette::remote_v3::RemoteV3AnisetteProvider,
     auth::apple_account::{AppleAccount, AppToken, TwoFactorCallbackParams, TwoFactorCallbackResponse},
     dev::{
@@ -127,6 +128,34 @@ struct SigningStatus {
     profile_error: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CertificateRecoveryOption {
+    serial_number: String,
+    name: String,
+    certificate_type: String,
+    status: String,
+    expiration: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CertificateRecoveryInfo {
+    message: String,
+    certificates: Vec<CertificateRecoveryOption>,
+}
+
+enum SignInOutcome {
+    Complete {
+        session_json: String,
+        status: SigningStatus,
+    },
+    CertificateRecovery {
+        session_json: String,
+        info: CertificateRecoveryInfo,
+    },
+}
+
 static INIT_RESULT: OnceLock<Result<(), String>> = OnceLock::new();
 
 fn initialize() -> Result<(), String> {
@@ -164,6 +193,73 @@ fn make_two_factor_callback(
     })
 }
 
+fn is_development_certificate_conflict(error: &rootcause::Report) -> bool {
+    error
+        .iter_reports()
+        .find_map(|node| node.downcast_current_context::<SideloadError>())
+        .is_some_and(|cause| matches!(cause, SideloadError::DeveloperError(7460, _)))
+}
+
+fn certificate_recovery_option(
+    certificate: &DevelopmentCertificate,
+) -> Option<CertificateRecoveryOption> {
+    let serial_number = certificate.serial_number.as_ref()?.trim();
+    if serial_number.is_empty() {
+        return None;
+    }
+
+    let certificate_type = certificate.certificate_type.as_ref()?;
+    let classification = [
+        certificate_type.certificate_type_display_id.as_deref(),
+        certificate_type.name.as_deref(),
+        certificate_type.permission_type.as_deref(),
+        certificate_type.distribution_type.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_ascii_lowercase();
+    if !classification.contains("development") || classification.contains("distribution") {
+        return None;
+    }
+
+    let status = certificate.status.clone()?;
+    if !status.eq_ignore_ascii_case("active") {
+        return None;
+    }
+
+    let certificate_type_name = certificate_type
+        .name
+        .clone()
+        .or_else(|| certificate_type.certificate_type_display_id.clone())
+        .unwrap_or_else(|| "iOS Development".to_string());
+    Some(CertificateRecoveryOption {
+        serial_number: serial_number.to_string(),
+        name: certificate
+            .name
+            .clone()
+            .or_else(|| certificate.machine_name.clone())
+            .unwrap_or_else(|| certificate_type_name.clone()),
+        certificate_type: certificate_type_name,
+        status,
+        expiration: certificate
+            .expiration_date
+            .as_ref()
+            .map(|date| date.to_xml_format())
+            .unwrap_or_default(),
+    })
+}
+
+fn certificate_recovery_options(
+    certificates: Vec<DevelopmentCertificate>,
+) -> Vec<CertificateRecoveryOption> {
+    certificates
+        .iter()
+        .filter_map(certificate_recovery_option)
+        .collect()
+}
+
 async fn sign_in(
     apple_id: String,
     password: Zeroizing<String>,
@@ -173,7 +269,7 @@ async fn sign_in(
     device_udid: String,
     callback: SigningTwoFactorCallback,
     callback_context: *mut c_void,
-) -> Result<(String, SigningStatus), String> {
+) -> Result<SignInOutcome, String> {
     let anisette_provider = create_anisette_provider(&storage_dir)?;
     let mut account = AppleAccount::builder(&apple_id)
         .anisette_provider(anisette_provider)
@@ -207,10 +303,23 @@ async fn sign_in(
         .ensure_device_registered(&team, &device_name, &device_udid, None)
         .await
         .map_err(|error| format!("could not register this iPhone for development signing: {error}"))?;
-    let storage = FsStorage::new(storage_dir.clone());
+
     let certificate_machine_name = "SidePair".to_string();
+    let session = StoredSession {
+        apple_id: apple_id.clone(),
+        adsid,
+        team_id: team.team_id.clone(),
+        certificate_machine_name: Some(certificate_machine_name.clone()),
+        token: app_token.token.clone(),
+        duration: app_token.duration,
+        expiry: app_token.expiry,
+    };
+    let session_json = serde_json::to_string(&session)
+        .map_err(|error| format!("could not serialize signing session: {error}"))?;
+
+    let storage = FsStorage::new(storage_dir.clone());
     let cert_behavior: MaxCertsBehavior<MaxCertsCallbackBox> = MaxCertsBehavior::Error;
-    let identity = CertificateIdentity::retrieve(
+    let identity = match CertificateIdentity::retrieve(
         &certificate_machine_name,
         &apple_id,
         &mut developer_session,
@@ -219,7 +328,25 @@ async fn sign_in(
         &cert_behavior,
     )
     .await
-    .map_err(|error| format!("could not create or select the Apple Development certificate: {error}"))?;
+    {
+        Ok(identity) => identity,
+        Err(error) if is_development_certificate_conflict(&error) => {
+            let certificates = developer_session
+                .list_ios_certs(&team)
+                .await
+                .map_err(|error| format!("could not list development certificates: {error}"))?;
+            return Ok(SignInOutcome::CertificateRecovery {
+                session_json,
+                info: CertificateRecoveryInfo {
+                    message: "Apple returned error 7460: an iOS Development certificate or pending request already exists. AquaSign has not revoked anything. You may choose an active development certificate to revoke, or cancel and resolve the pending request with Apple.".to_string(),
+                    certificates: certificate_recovery_options(certificates),
+                },
+            });
+        }
+        Err(error) => {
+            return Err(format!("could not create or select the Apple Development certificate: {error}"));
+        }
+    };
 
     let certificate = developer_session
         .list_ios_certs(&team)
@@ -232,20 +359,119 @@ async fn sign_in(
 
     let (profile_status, profile_uuid, profile_expiration, profile_error) =
         provision_profile(&mut developer_session, &team, &bundle_id, &storage_dir).await;
-
-    let session = StoredSession {
-        apple_id: apple_id.clone(),
-        adsid,
-        team_id: team.team_id.clone(),
-        certificate_machine_name: Some(certificate_machine_name),
-        token: app_token.token,
-        duration: app_token.duration,
-        expiry: app_token.expiry,
-    };
-    let session_json = serde_json::to_string(&session)
-        .map_err(|error| format!("could not serialize signing session: {error}"))?;
     let status = make_status(
         &apple_id,
+        &team,
+        certificate.as_ref(),
+        profile_status,
+        profile_uuid,
+        profile_expiration,
+        profile_error,
+    );
+    Ok(SignInOutcome::Complete {
+        session_json,
+        status,
+    })
+}
+
+async fn revoke_and_retry_certificate(
+    session_json: String,
+    storage_dir: PathBuf,
+    bundle_id: String,
+    device_name: String,
+    device_udid: String,
+    certificate_serial: String,
+) -> Result<(String, SigningStatus), String> {
+    let saved: StoredSession = serde_json::from_str(&session_json)
+        .map_err(|error| format!("saved signing session is invalid: {error}"))?;
+    let anisette_provider = create_anisette_provider(&storage_dir)?;
+    let account = AppleAccount::builder(&saved.apple_id)
+        .anisette_provider(anisette_provider)
+        .build()
+        .await
+        .map_err(|error| format!("could not restore Apple account session: {error}"))?;
+    let token = AppToken {
+        token: saved.token.clone(),
+        duration: saved.duration,
+        expiry: saved.expiry,
+    };
+    let mut developer_session = DeveloperSession::new(
+        token,
+        saved.adsid.clone(),
+        account.grandslam_client.clone(),
+        account.anisette_generator.clone(),
+    );
+    let team = developer_session
+        .list_teams()
+        .await
+        .map_err(|error| format!("could not list Apple developer teams: {error}"))?
+        .into_iter()
+        .find(|team| team.team_id == saved.team_id)
+        .ok_or_else(|| "the saved Apple developer team is no longer available; sign in again".to_string())?;
+    developer_session
+        .ensure_device_registered(&team, &device_name, &device_udid, None)
+        .await
+        .map_err(|error| format!("could not register this iPhone for development signing: {error}"))?;
+
+    let certificates = developer_session
+        .list_ios_certs(&team)
+        .await
+        .map_err(|error| format!("could not refresh development certificates: {error}"))?;
+    let selected_certificate = certificates
+        .iter()
+        .find(|certificate| {
+            certificate.serial_number.as_deref() == Some(certificate_serial.as_str())
+                && certificate_recovery_option(certificate).is_some()
+        })
+        .ok_or_else(|| {
+            "The selected certificate is no longer an active iOS Development certificate. AquaSign did not revoke anything; sign in again to refresh the list.".to_string()
+        })?;
+    let serial_number = selected_certificate
+        .serial_number
+        .clone()
+        .ok_or_else(|| "The selected certificate has no serial number; AquaSign did not revoke anything.".to_string())?;
+    developer_session
+        .revoke_development_cert(&team, &serial_number, DeveloperDeviceType::Ios)
+        .await
+        .map_err(|error| format!("Apple could not revoke the selected development certificate: {error}"))?;
+
+    let storage = FsStorage::new(storage_dir.clone());
+    let certificate_machine_name = saved
+        .certificate_machine_name
+        .clone()
+        .unwrap_or_else(|| "SidePair".to_string());
+    let cert_behavior: MaxCertsBehavior<MaxCertsCallbackBox> = MaxCertsBehavior::Error;
+    let identity = match CertificateIdentity::retrieve(
+        &certificate_machine_name,
+        &saved.apple_id,
+        &mut developer_session,
+        &team,
+        &storage,
+        &cert_behavior,
+    )
+    .await
+    {
+        Ok(identity) => identity,
+        Err(error) if is_development_certificate_conflict(&error) => {
+            return Err("The selected certificate was revoked, but Apple still reports an existing or pending development certificate. AquaSign stopped after one retry and did not revoke another certificate.".to_string());
+        }
+        Err(error) => {
+            return Err(format!("The selected certificate was revoked, but AquaSign could not create or select a replacement certificate: {error}"));
+        }
+    };
+
+    let certificate = developer_session
+        .list_ios_certs(&team)
+        .await
+        .map_err(|error| format!("the selected certificate was revoked, but AquaSign could not read the replacement certificate: {error}"))?
+        .into_iter()
+        .find(|certificate| {
+            certificate.serial_number.as_deref() == Some(identity.get_serial_number().as_str())
+        });
+    let (profile_status, profile_uuid, profile_expiration, profile_error) =
+        provision_profile(&mut developer_session, &team, &bundle_id, &storage_dir).await;
+    let status = make_status(
+        &saved.apple_id,
         &team,
         certificate.as_ref(),
         profile_status,
@@ -545,7 +771,7 @@ fn run_sign_in(
     device_udid: String,
     callback: SigningTwoFactorCallback,
     callback_context: *mut c_void,
-) -> Result<(String, SigningStatus), String> {
+) -> Result<SignInOutcome, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -559,6 +785,28 @@ fn run_sign_in(
         device_udid,
         callback,
         callback_context,
+    ))
+}
+
+fn run_revoke_and_retry_certificate(
+    session_json: String,
+    storage_dir: PathBuf,
+    bundle_id: String,
+    device_name: String,
+    device_udid: String,
+    certificate_serial: String,
+) -> Result<(String, SigningStatus), String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("could not start signing runtime: {error}"))?;
+    runtime.block_on(revoke_and_retry_certificate(
+        session_json,
+        storage_dir,
+        bundle_id,
+        device_name,
+        device_udid,
+        certificate_serial,
     ))
 }
 
@@ -626,6 +874,76 @@ pub unsafe extern "C" fn sidepair_sign_in(
     }));
 
     match result {
+        Ok(Ok(SignInOutcome::Complete {
+            session_json,
+            status,
+        })) => {
+            unsafe {
+                write_out(out_session_json, session_json);
+                write_out(out_status_json, serde_json::to_string(&status).unwrap_or_default());
+            }
+            0
+        }
+        Ok(Ok(SignInOutcome::CertificateRecovery { session_json, info })) => {
+            let message = info.message.clone();
+            unsafe {
+                write_out(out_session_json, session_json);
+                write_out(out_status_json, serde_json::to_string(&info).unwrap_or_default());
+                write_out(out_error, message);
+            }
+            3
+        }
+        Ok(Err(error)) => {
+            unsafe { write_out(out_error, error) };
+            1
+        }
+        Err(_) => {
+            unsafe { write_out(out_error, "unexpected panic in signing bridge".to_string()) };
+            2
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sidepair_revoke_and_retry_development_certificate(
+    session_json: *const c_char,
+    storage_dir: *const c_char,
+    bundle_id: *const c_char,
+    device_name: *const c_char,
+    device_udid: *const c_char,
+    certificate_serial: *const c_char,
+    out_session_json: *mut *mut c_char,
+    out_status_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    if out_session_json.is_null() || out_status_json.is_null() || out_error.is_null() {
+        return 2;
+    }
+    unsafe {
+        *out_session_json = ptr::null_mut();
+        *out_status_json = ptr::null_mut();
+        *out_error = ptr::null_mut();
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        initialize()?;
+        let session_json = unsafe { read_string(session_json, "saved signing session") }?;
+        let storage_dir = PathBuf::from(unsafe { read_string(storage_dir, "storage directory") }?);
+        let bundle_id = unsafe { read_string(bundle_id, "bundle identifier") }?;
+        let device_name = unsafe { read_string(device_name, "device name") }?;
+        let device_udid = unsafe { read_string(device_udid, "device identifier") }?;
+        let certificate_serial = unsafe { read_string(certificate_serial, "certificate serial number") }?;
+        run_revoke_and_retry_certificate(
+            session_json,
+            storage_dir,
+            bundle_id,
+            device_name,
+            device_udid,
+            certificate_serial,
+        )
+    }));
+
+    match result {
         Ok(Ok((session_json, status))) => {
             unsafe {
                 write_out(out_session_json, session_json);
@@ -638,7 +956,7 @@ pub unsafe extern "C" fn sidepair_sign_in(
             1
         }
         Err(_) => {
-            unsafe { write_out(out_error, "unexpected panic in signing bridge".to_string()) };
+            unsafe { write_out(out_error, "unexpected panic while recovering development certificate".to_string()) };
             2
         }
     }
