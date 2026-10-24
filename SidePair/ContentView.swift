@@ -1,6 +1,6 @@
 //
 //  ContentView.swift
-//  SidePair
+//  AquaSign
 //
 
 import SwiftUI
@@ -28,7 +28,7 @@ struct ContentView: View {
                 .padding(.bottom, 28)
             }
             .background(Color(uiColor: .systemGroupedBackground))
-            .navigationTitle("SidePair")
+            .navigationTitle("AquaSign")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
@@ -73,7 +73,7 @@ struct ContentView: View {
                 Text("Pair without a computer.")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .tracking(-0.5)
-                Text("SidePair hosts a secure Remote Pairing session on this iPhone.")
+                Text("AquaSign hosts a secure Remote Pairing session on this iPhone.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -254,7 +254,7 @@ struct ContentView: View {
                 .font(.headline)
             setupStep(number: "1", title: "Turn on Developer Mode", detail: "Settings → Privacy & Security → Developer Mode. Follow the restart and passcode prompts.")
             setupStep(number: "2", title: "Stay on Wi-Fi", detail: "Your iPhone needs Wi-Fi and Local Network access while pairing.")
-            setupStep(number: "3", title: "Pair from Settings", detail: "Start pairing here, then open Developer Mode settings, choose Pair with SidePair, and enter the code shown here or in the notification.")
+            setupStep(number: "3", title: "Pair from Settings", detail: "Start pairing here, then open Developer Mode settings, choose Pair with AquaSign, and enter the code shown here or in the notification.")
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -344,7 +344,7 @@ struct ContentView: View {
         case .preparing:
             "Preparing an IDEvice pairing host and local listener…"
         case .waiting:
-            "SidePair is advertising over Bonjour. Open Developer Mode settings to connect."
+            "AquaSign is advertising over Bonjour. Open Developer Mode settings to connect."
         case .connecting:
             "A device connected. Waiting for the secure pairing handshake…"
         case .pin:

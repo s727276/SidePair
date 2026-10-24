@@ -1,12 +1,12 @@
 //
-//  SidePairApp.swift
-//  SidePair
+//  AquaSignApp.swift
+//  AquaSign
 //
 
 import SwiftUI
 
 @main
-struct SidePairApp: App {
+struct AquaSignApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

@@ -86,7 +86,7 @@ struct AppLibraryView: View {
                         .font(.subheadline.weight(.semibold))
                 }
             }
-            Text("SidePair signs imported IPAs with your Apple ID and refreshes them with a newly issued provisioning profile before reinstalling. Personal provisioning uses a team-scoped bundle ID. Free personal profiles commonly last seven days; Apple sets the exact expiration. Some apps or capabilities may not be eligible for your team.")
+            Text("AquaSign signs imported IPAs with your Apple ID and refreshes them with a newly issued provisioning profile before reinstalling. Personal provisioning uses a team-scoped bundle ID. Free personal profiles commonly last seven days; Apple sets the exact expiration. Some apps or capabilities may not be eligible for your team.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -107,7 +107,7 @@ struct AppLibraryView: View {
                 Text("Your library is ready")
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.primary)
-                Text("Choose any IPA. SidePair signs it with your Apple ID and installs it over your paired connection.")
+                Text("Choose any IPA. AquaSign signs it with your Apple ID and installs it over your paired connection.")
                     .font(.system(size: 17))
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)

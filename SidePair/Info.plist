@@ -2,24 +2,26 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDisplayName</key>
+	<string>AquaSign</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.organizationName.SidePair</string>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleName</key>
-	<string>$(PRODUCT_NAME)</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>SidePair advertises a secure pairing host on your local network so this iPhone can pair with SidePair from Developer Mode.</string>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_remotepairing-pairable-host._tcp</string>
-	</array>
+	<string>AquaSign</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>13</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_remotepairing-pairable-host._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>AquaSign advertises a secure pairing host on your local network so this iPhone can pair with AquaSign from Developer Mode.</string>
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>

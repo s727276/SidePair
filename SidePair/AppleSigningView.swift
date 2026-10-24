@@ -89,7 +89,7 @@ struct AppleSigningView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text("Connect through LocalDevVPN before continuing. SidePair registers this iPhone with Apple before requesting its app-specific provisioning profile.")
+                Text("Connect through LocalDevVPN before continuing. AquaSign registers this iPhone with Apple before requesting its app-specific provisioning profile.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -114,7 +114,7 @@ struct AppleSigningView: View {
                 .foregroundStyle(Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Your password is sent directly to Apple for authentication and is never stored by SidePair. The signing session and development certificate are managed locally; Anisette verification uses a remote provider.")
+            Text("Your password is sent directly to Apple for authentication and is never stored by AquaSign. The signing session and development certificate are managed locally; Anisette verification uses a remote provider.")
                 .font(.caption)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)

@@ -448,11 +448,11 @@ async fn provision_profile(
         {
             Some(app_id) => app_id,
             None => developer_session
-                .add_app_id(team, "SidePair", &profile_bundle_id, DeveloperDeviceType::Ios)
+                .add_app_id(team, "AquaSign", &profile_bundle_id, DeveloperDeviceType::Ios)
                 .await
                 .map_err(|error| {
                     format!(
-                        "could not register SidePair's team-specific App ID '{profile_bundle_id}': {error}"
+                        "could not register AquaSign's team-specific App ID '{profile_bundle_id}': {error}"
                     )
                 })?,
         };

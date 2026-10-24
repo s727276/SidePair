@@ -1,4 +1,4 @@
-name: Build unsigned IPA
+name: AquaSign unsigned IPA
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build-unsigned-ipa:
-    name: Build unsigned iOS IPA
+    name: Build AquaSign unsigned iOS IPA
     runs-on: macos-26
     steps:
       - name: Check out source
@@ -53,14 +53,14 @@ jobs:
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/SidePair.app"
           test -d "$APP_PATH"
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
-          ditto "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/SidePair.app"
-          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/ipa/Payload" "$RUNNER_TEMP/SidePair-unsigned.ipa"
-          unzip -l "$RUNNER_TEMP/SidePair-unsigned.ipa"
+          ditto "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/AquaSign.app"
+          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/ipa/Payload" "$RUNNER_TEMP/AquaSign-unsigned.ipa"
+          unzip -l "$RUNNER_TEMP/AquaSign-unsigned.ipa"
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SidePair-unsigned-ipa
-          path: ${{ runner.temp }}/SidePair-unsigned.ipa
+          name: AquaSign-unsigned-ipa
+          path: ${{ runner.temp }}/AquaSign-unsigned.ipa
           if-no-files-found: error
           retention-days: 14

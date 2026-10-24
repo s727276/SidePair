@@ -58,7 +58,7 @@ final class RSDConnectionModel: ObservableObject {
         }
         guard let pairingFileURL,
               FileManager.default.fileExists(atPath: pairingFileURL.path) else {
-            state = .failed("Pair this iPhone first so SidePair has a Remote Pairing record to use.")
+            state = .failed("Pair this iPhone first so AquaSign has a Remote Pairing record to use.")
             return
         }
 
@@ -134,7 +134,7 @@ final class RSDConnectionModel: ObservableObject {
         var handshake: OpaquePointer?
         let tunnelError = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
-                "SidePair".withCString { hostname in
+                "AquaSign".withCString { hostname in
                     tunnel_create_rppairing(
                         socketAddress,
                         socklen_t(MemoryLayout<sockaddr_in>.stride),
@@ -289,7 +289,7 @@ extension RSDConnectionModel {
         }
         defer { afc_client_free(afcClient) }
 
-        let remotePath = "/PublicStaging/SidePair-\(UUID().uuidString).ipa"
+        let remotePath = "/PublicStaging/AquaSign-\(UUID().uuidString).ipa"
         defer {
             if let removeError = remotePath.withCString({ afc_remove_path(afcClient, $0) }) {
                 idevice_error_free(removeError)

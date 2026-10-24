@@ -130,7 +130,7 @@ final class AppleSigningModel: ObservableObject {
         }
         let retainedContext = Unmanaged.passRetained(callbackContext).toOpaque()
         let storagePath = Self.signingStorageURL().path
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.organizationName.SidePair"
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.Andrewdev.aquasign"
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var sessionOutput: UnsafeMutablePointer<CChar>?
@@ -280,7 +280,7 @@ final class AppleSigningModel: ObservableObject {
         }
 
         let storagePath = Self.signingStorageURL().path
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.organizationName.SidePair"
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.Andrewdev.aquasign"
         #if SIGNING_BRIDGE
         DispatchQueue.global(qos: .utility).async { [weak self] in
             var statusOutput: UnsafeMutablePointer<CChar>?
@@ -323,7 +323,7 @@ final class AppleSigningModel: ObservableObject {
     private func presentTwoFactor(requestJSON: String, reply: @escaping (String?) -> Void) {
         guard let data = requestJSON.data(using: .utf8),
               let request = try? JSONDecoder().decode(AppleTwoFactorRequest.self, from: data) else {
-            errorMessage = "Apple requested verification, but SidePair could not read the request."
+            errorMessage = "Apple requested verification, but AquaSign could not read the request."
             reply(nil)
             return
         }

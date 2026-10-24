@@ -61,11 +61,11 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate, UN
                 let allowed = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
                 guard state == .preparing else { return }
                 guard allowed else {
-                    state = .failed("Allow notifications so SidePair can show the pairing code while you confirm it in Settings.")
+                    state = .failed("Allow notifications so AquaSign can show the pairing code while you confirm it in Settings.")
                     return
                 }
             } catch {
-                state = .failed("SidePair couldn't request notification access for the pairing code.")
+                state = .failed("AquaSign couldn't request notification access for the pairing code.")
                 return
             }
             guard state == .preparing else { return }
@@ -87,7 +87,7 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate, UN
     private func beginPairingRun() {
         let session = UUID()
         currentSession = session
-        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "SidePair Remote Pairing") { [weak self] in
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "AquaSign Remote Pairing") { [weak self] in
             Task { @MainActor in self?.stopPairing() }
         }
 
@@ -162,7 +162,7 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate, UN
         state = .pin(pin)
 
         let content = UNMutableNotificationContent()
-        content.title = "SidePair pairing code"
+        content.title = "AquaSign pairing code"
         content.body = "Your code is \(pin). Enter it in Developer Mode settings."
         content.sound = .default
         content.threadIdentifier = "sidepair-pairing"
@@ -231,7 +231,7 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate, UN
         var txtLength: UInt = 0
         var hostAltIRK = [UInt8](repeating: 0, count: 16)
 
-        let error = "SidePair".withCString { name in
+        let error = "AquaSign".withCString { name in
             "Mac17,7".withCString { model in
                 hostAltIRK.withUnsafeMutableBufferPointer { altIRK in
                     pairable_host_prepare(
