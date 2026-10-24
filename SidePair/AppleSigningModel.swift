@@ -45,17 +45,57 @@ private struct SideStoreAccountConfiguration: Decodable {
 
     private enum CodingKeys: String, CodingKey {
         case email
+        case appleIDEmailAddress
+        case appleID
         case password
-        case certificate = "cert"
-        case certificatePassword = "certpass"
+        case appleIDPassword
+        case cert
+        case certificate
+        case signingCertificate
+        case certpass
+        case certificatePassword
+        case signingCertificatePassword
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        email = try values.decodeIfPresent(String.self, forKey: .email)
+            ?? values.decodeIfPresent(String.self, forKey: .appleIDEmailAddress)
+            ?? values.decode(String.self, forKey: .appleID)
+        password = try values.decodeIfPresent(String.self, forKey: .password)
+            ?? values.decode(String.self, forKey: .appleIDPassword)
+        certificate = try values.decodeIfPresent(Data.self, forKey: .cert)
+            ?? values.decodeIfPresent(Data.self, forKey: .certificate)
+            ?? values.decode(Data.self, forKey: .signingCertificate)
+        certificatePassword = try values.decodeIfPresent(String.self, forKey: .certpass)
+            ?? values.decodeIfPresent(String.self, forKey: .certificatePassword)
+            ?? values.decodeIfPresent(String.self, forKey: .signingCertificatePassword)
+            ?? ""
     }
 
     static func decode(_ fileData: Data) throws -> Self {
         guard fileData.count <= 10 * 1024 * 1024 else {
             throw AppleSigningImportError.configurationTooLarge
         }
-        let jsonData = Data(base64Encoded: fileData, options: .ignoreUnknownCharacters) ?? fileData
-        return try JSONDecoder().decode(Self.self, from: jsonData)
+
+        var candidates = [fileData]
+        if let decoded = Data(base64Encoded: fileData, options: .ignoreUnknownCharacters) {
+            candidates.insert(decoded, at: 0)
+            if let nestedText = String(data: decoded, encoding: .utf8),
+               let nested = Data(base64Encoded: nestedText, options: .ignoreUnknownCharacters) {
+                candidates.insert(nested, at: 0)
+            }
+        }
+
+        for candidate in candidates {
+            if let configuration = try? JSONDecoder().decode(Self.self, from: candidate) {
+                return configuration
+            }
+            if let configuration = try? PropertyListDecoder().decode(Self.self, from: candidate) {
+                return configuration
+            }
+        }
+        throw AppleSigningImportError.invalidSideStoreConfiguration
     }
 }
 
@@ -67,7 +107,7 @@ private enum AppleSigningImportError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidSideStoreConfiguration:
-            "The configuration is missing a valid Apple ID, password, or certificate."
+            "This file is not a supported SideStore account export. Choose the .sideconf file created by SideStore's Export Account command."
         case .unsupportedFileType:
             "Choose the .sideconf file exported by SideStore."
         case .configurationTooLarge:
