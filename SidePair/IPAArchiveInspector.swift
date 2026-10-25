@@ -7,6 +7,7 @@ struct IPAAppMetadata: Codable, Equatable, Identifiable {
     var version: String
     let archiveFileName: String
     var customizedArchiveFileName: String? = nil
+    var managedTeamID: String? = nil
     var installState: IPAInstallState
     var lastError: String?
     var installedAt: Date?
@@ -56,6 +57,20 @@ enum IPAArchiveInspector {
         }
     }
 
+    static func copyAndValidateAppBundle(at appBundleURL: URL) throws -> PreparedIPA {
+        let sourceIPA = try packageAppBundle(at: appBundleURL, prefix: "AquaSignSource")
+        defer { try? FileManager.default.removeItem(at: sourceIPA.deletingLastPathComponent()) }
+        let prepared = try copyAndValidate(from: sourceIPA)
+        guard let teamID = profileTeamIdentifier(at: appBundleURL) else { return prepared }
+
+        var metadata = prepared.metadata
+        metadata.managedTeamID = teamID
+        metadata.installState = .installed
+        metadata.installedAt = Date()
+        metadata.profileExpiration = profileExpiration(at: appBundleURL)
+        return PreparedIPA(metadata: metadata, fileURL: prepared.fileURL)
+    }
+
     static func archiveURL(for metadata: IPAAppMetadata) -> URL {
         archiveURL(named: metadata.customizedArchiveFileName ?? metadata.archiveFileName)
     }
@@ -68,6 +83,12 @@ enum IPAArchiveInspector {
         let profileURL = appBundleURL.appendingPathComponent("embedded.mobileprovision")
         guard let profileData = try? Data(contentsOf: profileURL) else { return nil }
         return MobileProvisioningProfileReader.expirationDate(from: profileData)
+    }
+
+    private static func profileTeamIdentifier(at appBundleURL: URL) -> String? {
+        let profileURL = appBundleURL.appendingPathComponent("embedded.mobileprovision")
+        guard let profileData = try? Data(contentsOf: profileURL) else { return nil }
+        return MobileProvisioningProfileReader.teamIdentifier(from: profileData)
     }
 
     static func profileExpiration(from value: String) -> Date? {
@@ -174,6 +195,38 @@ private enum MobileProvisioningProfileReader {
         var offset = 0
         guard let root = readElement(in: data, offset: &offset, limit: data.count) else { return nil }
         return expirationDate(in: root, data: data)
+    }
+
+    static func teamIdentifier(from data: Data) -> String? {
+        if let teamID = profileTeamIdentifier(in: data) { return teamID }
+        var offset = 0
+        guard let root = readElement(in: data, offset: &offset, limit: data.count) else { return nil }
+        return profileTeamIdentifier(in: root, data: data)
+    }
+
+    private static func profileTeamIdentifier(in element: Element, data: Data) -> String? {
+        if element.tag == 0x04,
+           let teamID = profileTeamIdentifier(in: data.subdata(in: element.content)) {
+            return teamID
+        }
+        if element.tag == 0x24,
+           let octets = octetStringContent(in: element, data: data),
+           let teamID = profileTeamIdentifier(in: octets) {
+            return teamID
+        }
+        guard element.tag & 0x20 != 0,
+              let nestedElements = children(of: element, in: data) else { return nil }
+        for nested in nestedElements {
+            if let teamID = profileTeamIdentifier(in: nested, data: data) { return teamID }
+        }
+        return nil
+    }
+
+    private static func profileTeamIdentifier(in data: Data) -> String? {
+        guard let propertyList = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let profile = propertyList as? [String: Any],
+              let teamIdentifiers = profile["TeamIdentifier"] as? [String] else { return nil }
+        return teamIdentifiers.first
     }
 
     private static func expirationDate(in element: Element, data: Data) -> Date? {

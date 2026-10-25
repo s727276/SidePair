@@ -113,7 +113,7 @@ struct AppLibraryView: View {
     }
 
     private var refreshAllCard: some View {
-        let installedApps = library.refreshableApps
+        let installedApps = library.refreshableApps(forTeamID: signing.status?.teamId)
         return VStack(alignment: .leading, spacing: 13) {
             HStack {
                 Label("Refresh all apps", systemImage: "arrow.clockwise")
@@ -124,11 +124,31 @@ struct AppLibraryView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Text("Requires an active LocalDevVPN connection and your saved Apple signing session.")
+            Text("Only apps installed through your signed-in developer team are included. Requires LocalDevVPN and your saved Apple signing session. Reinstall other library apps to enroll them.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
-            if library.apps.contains(where: { $0.installedAt != nil && library.isAquaSignApp($0) }) {
+            if library.isPreparingAquaSignEntry {
+                Label("Adding AquaSign to your library…", systemImage: "arrow.down.doc")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let error = library.aquaSignPreparationError {
+                Label("Could not add AquaSign: \(error)", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if library.apps.contains(where: library.isAquaSignApp),
+               !installedApps.contains(where: library.isAquaSignApp) {
+                Label("AquaSign must be signed and installed through this developer team before Refresh All can include it.", systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if installedApps.contains(where: library.isAquaSignApp) {
                 Label("AquaSign refreshes last and may close while iOS replaces it.", systemImage: "info.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -151,7 +171,7 @@ struct AppLibraryView: View {
                 }
             } else {
                 Text(installedApps.isEmpty
-                     ? "Install an app to enable Refresh All. AquaSign refreshes last when it is in your library."
+                     ? "Install an app through this developer team to enable Refresh All. AquaSign refreshes last when eligible."
                      : "Profile expiry will appear after AquaSign reads a signed app profile.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -176,7 +196,7 @@ struct AppLibraryView: View {
     }
 
     private var nextExpiringApp: IPAAppMetadata? {
-        let appsWithExpiration = library.refreshableApps.filter { $0.profileExpiration != nil }
+        let appsWithExpiration = library.refreshableApps(forTeamID: signing.status?.teamId).filter { $0.profileExpiration != nil }
         let now = Date()
         return appsWithExpiration
             .filter { ($0.profileExpiration ?? .distantPast) > now }
