@@ -64,3 +64,42 @@ jobs:
           path: ${{ runner.temp }}/AquaSign-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
+
+  build-aqua-installer:
+    name: Build Aqua Installer for macOS
+    runs-on: macos-26
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Rust macOS targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build Apple signing bridge for Apple silicon
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/AquaInstallerRust
+        run: cargo build --manifest-path SigningBridge/Cargo.toml --release --target aarch64-apple-darwin
+
+      - name: Build Apple signing bridge for Intel
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/AquaInstallerRust
+        run: cargo build --manifest-path SigningBridge/Cargo.toml --release --target x86_64-apple-darwin
+
+      - name: Build universal Aqua Installer app
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/AquaInstallerRust
+          AQUA_INSTALLER_OUTPUT_DIR: ${{ runner.temp }}/AquaInstallerBuild
+        run: bash AquaInstaller/build-macos.sh
+
+      - name: Package Aqua Installer
+        run: ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/AquaInstallerBuild/Aqua Installer.app" "$RUNNER_TEMP/Aqua-Installer-macOS-universal.zip"
+
+      - name: Upload Aqua Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aqua-Installer-macOS-universal
+          path: ${{ runner.temp }}/Aqua-Installer-macOS-universal.zip
+          if-no-files-found: error
+          retention-days: 14

@@ -6,7 +6,7 @@ struct AppLibraryView: View {
     @ObservedObject var connection: RSDConnectionModel
     @ObservedObject var signing: AppleSigningModel
     let pairingFileURL: URL?
-    @StateObject private var library = AppLibraryModel()
+    @ObservedObject var library: AppLibraryModel
     @State private var showingImporter = false
 
     var body: some View {
@@ -14,6 +14,7 @@ struct AppLibraryView: View {
             VStack(alignment: .leading, spacing: 22) {
                 header
                 signingNote
+                refreshAllCard
 
                 if library.apps.isEmpty {
                     emptyLibraryCard
@@ -21,8 +22,15 @@ struct AppLibraryView: View {
                     appList
                 }
 
-                if library.isBusy {
+                if library.isBusy || library.isRefreshingAll {
                     progressCard
+                }
+
+                if let summary = library.refreshSummaryMessage {
+                    Label(summary, systemImage: library.errorMessage == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(library.errorMessage == nil ? Color.green : Color.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if let error = library.errorMessage {
@@ -95,6 +103,88 @@ struct AppLibraryView: View {
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
+    private var refreshAllCard: some View {
+        let installedApps = library.apps.filter { $0.installedAt != nil }
+        return VStack(alignment: .leading, spacing: 13) {
+            HStack {
+                Label("Refresh all apps", systemImage: "arrow.clockwise")
+                    .font(.headline)
+                Spacer()
+                Text("\(installedApps.count) installed")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("Requires an active LocalDevVPN connection and your saved Apple signing session.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let nextExpiringApp = nextExpiringApp {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("\(nextExpiringApp.displayName) profile expires in")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(expirationCountdown(nextExpiringApp.profileExpiration!, at: context.date))
+                            .font(.system(.title3, design: .rounded, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(.primary)
+                        Text("Exact expiry · \(expirationTimestamp(nextExpiringApp.profileExpiration!))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else {
+                Text(installedApps.isEmpty
+                     ? "Installed app profile expirations will appear here after a refresh."
+                     : "Profile expiry will appear after AquaSign reads a signed app profile.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Button {
+                Task { await library.refreshAll(signing: signing, connection: connection) }
+            } label: {
+                Label(library.isRefreshingAll ? "Refreshing apps…" : "Refresh all", systemImage: "arrow.clockwise")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.blue, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+            .disabled(library.isBusy || library.isRefreshingAll || installedApps.isEmpty)
+        }
+        .padding(16)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private var nextExpiringApp: IPAAppMetadata? {
+        let appsWithExpiration = library.apps.filter {
+            $0.installedAt != nil && $0.profileExpiration != nil
+        }
+        let now = Date()
+        return appsWithExpiration
+            .filter { ($0.profileExpiration ?? .distantPast) > now }
+            .min { ($0.profileExpiration ?? .distantFuture) < ($1.profileExpiration ?? .distantFuture) }
+            ?? appsWithExpiration.max { ($0.profileExpiration ?? .distantPast) < ($1.profileExpiration ?? .distantPast) }
+    }
+
+    private func expirationCountdown(_ expiration: Date, at now: Date) -> String {
+        let timeRemaining = expiration.timeIntervalSince(now)
+        guard timeRemaining > 0 else { return "Expired" }
+        let secondsRemaining = Int(timeRemaining.rounded(.up))
+        let days = secondsRemaining / 86_400
+        let hours = (secondsRemaining % 86_400) / 3_600
+        let minutes = (secondsRemaining % 3_600) / 60
+        let seconds = secondsRemaining % 60
+        return "\(days)d \(hours)h \(minutes)m \(seconds)s"
+    }
+
+    private func expirationTimestamp(_ expiration: Date) -> String {
+        expiration.formatted(.dateTime.month(.abbreviated).day().year().hour().minute().second())
+    }
+
     private var emptyLibraryCard: some View {
         VStack(spacing: 18) {
             Image(systemName: "shippingbox.fill")
@@ -126,7 +216,7 @@ struct AppLibraryView: View {
                     .shadow(color: .blue.opacity(0.18), radius: 8, y: 4)
             }
             .buttonStyle(.plain)
-            .disabled(library.isBusy)
+            .disabled(library.isBusy || library.isRefreshingAll)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 22)
@@ -157,7 +247,7 @@ struct AppLibraryView: View {
                     .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
             }
             .buttonStyle(.plain)
-            .disabled(library.isBusy)
+            .disabled(library.isBusy || library.isRefreshingAll)
         }
     }
 
@@ -189,6 +279,23 @@ struct AppLibraryView: View {
                     .background(app.installState.color.opacity(0.1), in: Capsule())
             }
 
+            if let expiration = app.profileExpiration {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Profile expires in \(expirationCountdown(expiration, at: context.date))")
+                            .font(.caption.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(expiration > context.date ? Color.secondary : Color.orange)
+                        Text("Exact expiry · \(expirationTimestamp(expiration))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else if app.installedAt != nil {
+                Label("Could not read this app's profile expiry", systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             if let lastError = app.lastError, !lastError.isEmpty {
                 Text(lastError)
                     .font(.caption)
@@ -200,8 +307,8 @@ struct AppLibraryView: View {
                 Task { try? await library.install(app, signing: signing, connection: connection) }
             } label: {
                 Label(
-                    library.isBusy ? "Working…" : (app.installState == .installed ? "Refresh & reinstall" : "Sign & install"),
-                    systemImage: app.installState == .installed ? "arrow.clockwise" : "arrow.down.to.line"
+                    library.isBusy ? "Working…" : (app.installedAt != nil ? "Refresh & reinstall" : "Sign & install"),
+                    systemImage: app.installedAt != nil ? "arrow.clockwise" : "arrow.down.to.line"
                 )
                 .font(.subheadline.weight(.semibold))
                 .frame(maxWidth: .infinity)
@@ -210,7 +317,7 @@ struct AppLibraryView: View {
                 .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
-            .disabled(library.isBusy)
+            .disabled(library.isBusy || library.isRefreshingAll)
         }
         .padding(16)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))

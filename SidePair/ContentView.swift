@@ -6,9 +6,13 @@
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var pairing = PairingHostModel()
     @StateObject private var connection = RSDConnectionModel()
     @StateObject private var signing = AppleSigningModel()
+    @StateObject private var library = AppLibraryModel()
+    @State private var showingAppLibrary = false
+    @State private var isProcessingWidgetRefresh = false
 
     var body: some View {
         NavigationStack {
@@ -33,7 +37,7 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     NavigationLink {
-                        AppLibraryView(connection: connection, signing: signing, pairingFileURL: pairing.pairingFileURL)
+                        AppLibraryView(connection: connection, signing: signing, pairingFileURL: pairing.pairingFileURL, library: library)
                     } label: {
                         Image(systemName: "square.stack.3d.up.fill")
                     }
@@ -47,9 +51,57 @@ struct ContentView: View {
                     .accessibilityLabel("Apple signing")
                 }
             }
+            .navigationDestination(isPresented: $showingAppLibrary) {
+                AppLibraryView(connection: connection, signing: signing, pairingFileURL: pairing.pairingFileURL, library: library)
+            }
         }
         .tint(.blue)
-        .task { signing.restoreSessionIfAvailable() }
+        .task {
+            signing.restoreSessionIfAvailable()
+            await processWidgetRefreshRequest()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await processWidgetRefreshRequest() }
+        }
+    }
+
+    @MainActor
+    private func processWidgetRefreshRequest() async {
+        let appGroupID = "group.com.Andrewdev.aquasign.shared"
+        let requestKey = "aquaSignPendingWidgetRefresh"
+        guard !isProcessingWidgetRefresh,
+              let defaults = UserDefaults(suiteName: appGroupID),
+              defaults.bool(forKey: requestKey) else { return }
+
+        defaults.set(false, forKey: requestKey)
+        isProcessingWidgetRefresh = true
+        showingAppLibrary = true
+        defer { isProcessingWidgetRefresh = false }
+
+        signing.restoreSessionIfAvailable()
+        for _ in 0..<240 {
+            if !signing.isWorking { break }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        guard signing.status != nil else {
+            library.reportError(signing.errorMessage ?? "Sign in to your Apple developer account before refreshing apps.")
+            return
+        }
+
+        if !connection.isConnected && !connection.isConnecting {
+            connection.connect(using: pairing.pairingFileURL)
+        }
+        for _ in 0..<120 {
+            if connection.isConnected || !connection.isConnecting { break }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        guard connection.isConnected else {
+            library.reportError(connection.failureMessage ?? "Connect LocalDevVPN and confirm its Device IP before refreshing apps.")
+            return
+        }
+
+        await library.refreshAll(signing: signing, connection: connection)
     }
 
     private var introCard: some View {

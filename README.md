@@ -25,9 +25,11 @@ Your Apple ID password is sent to Apple for authentication and is not saved by A
 
 ## Build with GitHub Actions
 
-A push to `main` starts the **AquaSign unsigned IPA** workflow. It builds the Rust signing bridge for `aarch64-apple-ios`, builds the iOS app with Xcode without Apple code signing, packages an unsigned IPA, and uploads it as the **AquaSign-unsigned-ipa** artifact. The workflow can also be started manually with `workflow_dispatch`; artifacts are retained for 14 days.
+A push to `main` starts the **AquaSign unsigned IPA** workflow. It builds the Rust signing bridge and iOS app, then uploads the unsigned **AquaSign-unsigned-ipa** artifact and a universal **Aqua-Installer-macOS-universal** artifact for Apple silicon and Intel Macs. The workflow can also be started manually with `workflow_dispatch`; artifacts are retained for 14 days.
 
-The workflow artifact is unsigned. It is not an App Store release and must be signed and installed through an appropriate trusted process. A successful GitHub Actions run only confirms that the build completed; it does not mean an IPA has been signed for your Apple account or installed on a device.
+Aqua Installer imports that unsigned AquaSign IPA, checks its bundle identifier, signs it locally with your Apple developer account, then installs the signed app to a wired iPhone with Apple's `devicectl`. Apple ID passwords and signing sessions are not uploaded to GitHub; the session is stored in the Mac's Keychain. Apple authentication uses the signing bridge's remote Anisette verification provider. The Mac needs an Xcode installation with `devicectl` available through `xcrun`, and the iPhone must be unlocked, paired with the Mac, and have Developer Mode enabled. Apple's signing and device/profile limits still apply.
+
+The GitHub IPA remains unsigned and is not an App Store release. The Aqua Installer macOS artifact is ad-hoc signed and not notarized; macOS may require you to approve it the first time you open it. A successful GitHub Actions run only confirms the build completed; it does not mean AquaSign has been signed for your account or installed on a device.
 
 ## Project status
 

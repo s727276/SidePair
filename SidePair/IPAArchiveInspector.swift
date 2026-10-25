@@ -9,6 +9,7 @@ struct IPAAppMetadata: Codable, Equatable, Identifiable {
     var installState: IPAInstallState
     var lastError: String?
     var installedAt: Date?
+    var profileExpiration: Date?
 
     var id: String { bundleIdentifier }
 }
@@ -56,6 +57,15 @@ enum IPAArchiveInspector {
 
     static func archiveURL(for metadata: IPAAppMetadata) -> URL {
         importDirectory().appendingPathComponent(metadata.archiveFileName)
+    }
+
+    static func profileExpiration(at appBundleURL: URL) -> Date? {
+        let profileURL = appBundleURL.appendingPathComponent("embedded.mobileprovision")
+        guard let profileData = try? Data(contentsOf: profileURL),
+              let plistData = MobileProvisioningProfileReader.plistData(from: profileData),
+              let plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil),
+              let profile = plist as? [String: Any] else { return nil }
+        return profile["ExpirationDate"] as? Date
     }
 
     static func packageSignedApp(at appBundleURL: URL) throws -> URL {
@@ -132,6 +142,72 @@ enum IPAArchiveInspector {
             ?? (info["CFBundleVersion"] as? String)
             ?? "Unknown"
         return (bundleIdentifier, displayName, version)
+    }
+}
+
+private enum MobileProvisioningProfileReader {
+    private struct Element {
+        let tag: UInt8
+        let content: Range<Int>
+    }
+
+    static func plistData(from data: Data) -> Data? {
+        var offset = 0
+        guard let contentInfo = readElement(in: data, offset: &offset, limit: data.count),
+              contentInfo.tag == 0x30,
+              let contentInfoChildren = children(of: contentInfo, in: data),
+              contentInfoChildren.count >= 2,
+              contentInfoChildren[1].tag == 0xA0,
+              let explicitContent = children(of: contentInfoChildren[1], in: data),
+              let signedData = explicitContent.first(where: { $0.tag == 0x30 }),
+              let signedDataChildren = children(of: signedData, in: data),
+              signedDataChildren.count >= 3,
+              let encapsulatedContent = children(of: signedDataChildren[2], in: data),
+              encapsulatedContent.count >= 2,
+              encapsulatedContent[1].tag == 0xA0,
+              let plistWrapper = children(of: encapsulatedContent[1], in: data),
+              let octetString = plistWrapper.first(where: { $0.tag == 0x04 }) else { return nil }
+        return data.subdata(in: octetString.content)
+    }
+
+    private static func children(of element: Element, in data: Data) -> [Element]? {
+        var elements: [Element] = []
+        var offset = element.content.lowerBound
+        while offset < element.content.upperBound {
+            guard let child = readElement(in: data, offset: &offset, limit: element.content.upperBound) else { return nil }
+            elements.append(child)
+        }
+        return elements
+    }
+
+    private static func readElement(in data: Data, offset: inout Int, limit: Int) -> Element? {
+        guard offset < limit else { return nil }
+        let tag = data[offset]
+        offset += 1
+        guard offset < limit else { return nil }
+
+        let firstLengthByte = data[offset]
+        offset += 1
+        var length = 0
+        if firstLengthByte & 0x80 == 0 {
+            length = Int(firstLengthByte)
+        } else {
+            let lengthByteCount = Int(firstLengthByte & 0x7F)
+            guard lengthByteCount > 0,
+                  lengthByteCount <= MemoryLayout<Int>.size,
+                  offset + lengthByteCount <= limit else { return nil }
+            for _ in 0..<lengthByteCount {
+                let byte = Int(data[offset])
+                offset += 1
+                guard length <= (Int.max - byte) / 256 else { return nil }
+                length = length * 256 + byte
+            }
+        }
+
+        guard length <= limit - offset else { return nil }
+        let content = offset..<(offset + length)
+        offset += length
+        return Element(tag: tag, content: content)
     }
 }
 
