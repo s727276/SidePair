@@ -3,9 +3,10 @@ import ZIPFoundation
 
 struct IPAAppMetadata: Codable, Equatable, Identifiable {
     let bundleIdentifier: String
-    let displayName: String
-    let version: String
+    var displayName: String
+    var version: String
     let archiveFileName: String
+    var customizedArchiveFileName: String? = nil
     var installState: IPAInstallState
     var lastError: String?
     var installedAt: Date?
@@ -56,23 +57,40 @@ enum IPAArchiveInspector {
     }
 
     static func archiveURL(for metadata: IPAAppMetadata) -> URL {
-        importDirectory().appendingPathComponent(metadata.archiveFileName)
+        archiveURL(named: metadata.customizedArchiveFileName ?? metadata.archiveFileName)
+    }
+
+    static func archiveURL(named fileName: String) -> URL {
+        importDirectory().appendingPathComponent(fileName)
     }
 
     static func profileExpiration(at appBundleURL: URL) -> Date? {
         let profileURL = appBundleURL.appendingPathComponent("embedded.mobileprovision")
-        guard let profileData = try? Data(contentsOf: profileURL),
-              let plistData = MobileProvisioningProfileReader.plistData(from: profileData),
-              let plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil),
-              let profile = plist as? [String: Any] else { return nil }
-        return profile["ExpirationDate"] as? Date
+        guard let profileData = try? Data(contentsOf: profileURL) else { return nil }
+        return MobileProvisioningProfileReader.expirationDate(from: profileData)
+    }
+
+    static func profileExpiration(from value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)
     }
 
     static func packageSignedApp(at appBundleURL: URL) throws -> URL {
+        try packageAppBundle(at: appBundleURL, prefix: "SidePairSigned")
+    }
+
+    static func packageCustomizedApp(at appBundleURL: URL) throws -> URL {
+        try packageAppBundle(at: appBundleURL, prefix: "SidePairCustomized")
+    }
+
+    private static func packageAppBundle(at appBundleURL: URL, prefix: String) throws -> URL {
         let workspace = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SidePairSigned-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
         let payloadDirectory = workspace.appendingPathComponent("Payload", isDirectory: true)
-        let archiveURL = workspace.appendingPathComponent("Signed.ipa")
+        let archiveURL = workspace.appendingPathComponent("\(prefix).ipa")
 
         do {
             try FileManager.default.createDirectory(
@@ -151,23 +169,52 @@ private enum MobileProvisioningProfileReader {
         let content: Range<Int>
     }
 
-    static func plistData(from data: Data) -> Data? {
+    static func expirationDate(from data: Data) -> Date? {
+        if let expiration = plistExpiration(in: data) { return expiration }
         var offset = 0
-        guard let contentInfo = readElement(in: data, offset: &offset, limit: data.count),
-              contentInfo.tag == 0x30,
-              let contentInfoChildren = children(of: contentInfo, in: data),
-              contentInfoChildren.count >= 2,
-              contentInfoChildren[1].tag == 0xA0,
-              let explicitContent = children(of: contentInfoChildren[1], in: data),
-              let signedData = explicitContent.first(where: { $0.tag == 0x30 }),
-              let signedDataChildren = children(of: signedData, in: data),
-              signedDataChildren.count >= 3,
-              let encapsulatedContent = children(of: signedDataChildren[2], in: data),
-              encapsulatedContent.count >= 2,
-              encapsulatedContent[1].tag == 0xA0,
-              let plistWrapper = children(of: encapsulatedContent[1], in: data),
-              let octetString = plistWrapper.first(where: { $0.tag == 0x04 }) else { return nil }
-        return data.subdata(in: octetString.content)
+        guard let root = readElement(in: data, offset: &offset, limit: data.count) else { return nil }
+        return expirationDate(in: root, data: data)
+    }
+
+    private static func expirationDate(in element: Element, data: Data) -> Date? {
+        if element.tag == 0x04,
+           let expiration = plistExpiration(in: data.subdata(in: element.content)) {
+            return expiration
+        }
+        if element.tag == 0x24,
+           let octets = octetStringContent(in: element, data: data),
+           let expiration = plistExpiration(in: octets) {
+            return expiration
+        }
+        guard element.tag & 0x20 != 0,
+              let nestedElements = children(of: element, in: data) else { return nil }
+        for nested in nestedElements {
+            if let expiration = expirationDate(in: nested, data: data) { return expiration }
+        }
+        return nil
+    }
+
+    private static func plistExpiration(in data: Data) -> Date? {
+        guard let propertyList = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let profile = propertyList as? [String: Any] else { return nil }
+        return profile["ExpirationDate"] as? Date
+    }
+
+    private static func octetStringContent(in element: Element, data: Data) -> Data? {
+        guard element.tag == 0x24,
+              let segments = children(of: element, in: data) else { return nil }
+        var content = Data()
+        for segment in segments {
+            if segment.tag == 0x04 {
+                content.append(data.subdata(in: segment.content))
+            } else if segment.tag == 0x24,
+                      let nested = octetStringContent(in: segment, data: data) {
+                content.append(nested)
+            } else {
+                return nil
+            }
+        }
+        return content
     }
 
     private static func children(of element: Element, in data: Data) -> [Element]? {
@@ -188,6 +235,20 @@ private enum MobileProvisioningProfileReader {
 
         let firstLengthByte = data[offset]
         offset += 1
+        if firstLengthByte == 0x80 {
+            guard tag & 0x20 != 0 else { return nil }
+            let contentStart = offset
+            var cursor = offset
+            while cursor + 1 < limit {
+                if data[cursor] == 0, data[cursor + 1] == 0 {
+                    offset = cursor + 2
+                    return Element(tag: tag, content: contentStart..<cursor)
+                }
+                guard readElement(in: data, offset: &cursor, limit: limit) != nil else { return nil }
+            }
+            return nil
+        }
+
         var length = 0
         if firstLengthByte & 0x80 == 0 {
             length = Int(firstLengthByte)

@@ -85,7 +85,7 @@ struct SidePairWidgetExtensionEntryView: View {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text("\(entry.installedCount)")
                     .font(.system(size: 30, weight: .bold, design: .rounded).monospacedDigit())
-                Text(entry.installedCount == 1 ? "app installed" : "apps installed")
+                Text(entry.installedCount == 1 ? "app to refresh" : "apps to refresh")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -115,7 +115,7 @@ struct SidePairWidgetExtensionEntryView: View {
                     }
                 }
             } else {
-                Text(entry.installedCount == 0 ? "Add apps in AquaSign to begin." : "Refresh an app to read its profile expiry.")
+                Text(entry.installedCount == 0 ? "Add an app to AquaSign to begin." : "Refresh an app to read its profile expiry.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -157,7 +157,7 @@ struct SidePairWidgetExtensionWidget: Widget {
             SidePairWidgetExtensionEntryView(entry: entry)
         }
         .configurationDisplayName("AquaSign Refresh")
-        .description("See your installed apps and refresh them together through LocalDevVPN.")
+        .description("Refresh all installed library apps together through LocalDevVPN.")
         .supportedFamilies([.systemSmall, .systemMedium])
     }
 }

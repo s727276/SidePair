@@ -4,6 +4,8 @@ struct AppleSigningView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var model: AppleSigningModel
     @ObservedObject var connection: RSDConnectionModel
+    var onNavigate: (AquaSignRoute) -> Void = { _ in }
+    var onPair: () -> Void = {}
     @State private var isPasswordVisible = false
 
     var body: some View {
@@ -285,9 +287,9 @@ struct AppleSigningView: View {
 
     private var tabBar: some View {
         HStack(spacing: 4) {
-            tabItem("Pair", symbol: "rectangle.on.rectangle", selected: false) { dismiss() }
+            tabItem("Pair", symbol: "rectangle.on.rectangle", selected: false, action: onPair)
             tabItem("App Library", symbol: "square.stack.3d.up.fill", selected: true) {}
-            tabItem("Settings", symbol: "gearshape", selected: false) {}
+            tabItem("Settings", symbol: "gearshape", selected: false) { onNavigate(.settings) }
         }
         .padding(8)
         .background(.ultraThinMaterial, in: Capsule())

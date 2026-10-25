@@ -2,12 +2,15 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct AppLibraryView: View {
-    @Environment(\.dismiss) private var dismiss
     @ObservedObject var connection: RSDConnectionModel
     @ObservedObject var signing: AppleSigningModel
     let pairingFileURL: URL?
     @ObservedObject var library: AppLibraryModel
+    let onNavigate: (AquaSignRoute) -> Void
+    let onPair: () -> Void
+    @AppStorage("sidepairShowIPACustomizationBeforeSigning") private var showCustomizationBeforeSigning = false
     @State private var showingImporter = false
+    @State private var customizationApp: IPAAppMetadata?
 
     var body: some View {
         ScrollView {
@@ -62,6 +65,14 @@ struct AppLibraryView: View {
             allowsMultipleSelection: false,
             onCompletion: handleImport
         )
+        .fullScreenCover(item: $customizationApp) { app in
+            IPACustomizationView(
+                app: app,
+                library: library,
+                signing: signing,
+                connection: connection
+            )
+        }
     }
 
     private var header: some View {
@@ -87,12 +98,10 @@ struct AppLibraryView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(signing.status == nil ? .orange : .green)
                 Spacer()
-                NavigationLink {
-                    AppleSigningView(model: signing, connection: connection)
-                } label: {
-                    Text(signing.status == nil ? "Sign in" : "Manage")
-                        .font(.subheadline.weight(.semibold))
+                Button(signing.status == nil ? "Sign in" : "Manage") {
+                    onNavigate(.appleSigning)
                 }
+                .font(.subheadline.weight(.semibold))
             }
             Text("AquaSign signs imported IPAs with your Apple ID and refreshes them with a newly issued provisioning profile before reinstalling. Personal provisioning uses a team-scoped bundle ID. Free personal profiles commonly last seven days; Apple sets the exact expiration. Some apps or capabilities may not be eligible for your team.")
                 .font(.caption)
@@ -104,13 +113,13 @@ struct AppLibraryView: View {
     }
 
     private var refreshAllCard: some View {
-        let installedApps = library.apps.filter { $0.installedAt != nil }
+        let installedApps = library.refreshableApps
         return VStack(alignment: .leading, spacing: 13) {
             HStack {
                 Label("Refresh all apps", systemImage: "arrow.clockwise")
                     .font(.headline)
                 Spacer()
-                Text("\(installedApps.count) installed")
+                Text("\(installedApps.count) to refresh")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
             }
@@ -118,6 +127,13 @@ struct AppLibraryView: View {
             Text("Requires an active LocalDevVPN connection and your saved Apple signing session.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            if library.apps.contains(where: { $0.installedAt != nil && library.isAquaSignApp($0) }) {
+                Label("AquaSign refreshes last and may close while iOS replaces it.", systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if let nextExpiringApp = nextExpiringApp {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -135,7 +151,7 @@ struct AppLibraryView: View {
                 }
             } else {
                 Text(installedApps.isEmpty
-                     ? "Installed app profile expirations will appear here after a refresh."
+                     ? "Install an app to enable Refresh All. AquaSign refreshes last when it is in your library."
                      : "Profile expiry will appear after AquaSign reads a signed app profile.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -160,9 +176,7 @@ struct AppLibraryView: View {
     }
 
     private var nextExpiringApp: IPAAppMetadata? {
-        let appsWithExpiration = library.apps.filter {
-            $0.installedAt != nil && $0.profileExpiration != nil
-        }
+        let appsWithExpiration = library.refreshableApps.filter { $0.profileExpiration != nil }
         let now = Date()
         return appsWithExpiration
             .filter { ($0.profileExpiration ?? .distantPast) > now }
@@ -303,21 +317,42 @@ struct AppLibraryView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Button {
-                Task { try? await library.install(app, signing: signing, connection: connection) }
-            } label: {
-                Label(
-                    library.isBusy ? "Working…" : (app.installedAt != nil ? "Refresh & reinstall" : "Sign & install"),
-                    systemImage: app.installedAt != nil ? "arrow.clockwise" : "arrow.down.to.line"
-                )
-                .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color.blue, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .foregroundStyle(.white)
+            HStack(spacing: 10) {
+                Button {
+                    customizationApp = app
+                } label: {
+                    Label("Customize", systemImage: "slider.horizontal.3")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.bordered)
+                .disabled(library.isBusy || library.isRefreshingAll)
+
+                Button {
+                    if showCustomizationBeforeSigning {
+                        customizationApp = app
+                    } else {
+                        Task { try? await library.install(app, signing: signing, connection: connection) }
+                    }
+                } label: {
+                    Label(
+                        showCustomizationBeforeSigning
+                            ? "Review & Sign"
+                            : (library.isBusy ? "Working…" : (app.installedAt != nil ? "Refresh & reinstall" : "Sign & install")),
+                        systemImage: showCustomizationBeforeSigning
+                            ? "slider.horizontal.3"
+                            : (app.installedAt != nil ? "arrow.clockwise" : "arrow.down.to.line")
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.blue, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .disabled(library.isBusy || library.isRefreshingAll)
             }
-            .buttonStyle(.plain)
-            .disabled(library.isBusy || library.isRefreshingAll)
         }
         .padding(16)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -382,9 +417,9 @@ struct AppLibraryView: View {
 
     private var tabBar: some View {
         HStack(spacing: 4) {
-            tabItem("Pair", symbol: "rectangle.on.rectangle", selected: false) { dismiss() }
+            tabItem("Pair", symbol: "rectangle.on.rectangle", selected: false, action: onPair)
             tabItem("App Library", symbol: "square.stack.3d.up.fill", selected: true) {}
-            tabItem("Settings", symbol: "gearshape", selected: false) {}
+            tabItem("Settings", symbol: "gearshape", selected: false) { onNavigate(.settings) }
         }
         .padding(8)
         .background(.ultraThinMaterial, in: Capsule())
@@ -415,7 +450,15 @@ struct AppLibraryView: View {
         switch result {
         case let .success(urls):
             guard let url = urls.first else { return }
-            library.importIPA(from: url, signing: signing, connection: connection)
+            library.importIPA(
+                from: url,
+                signing: signing,
+                connection: connection,
+                customizeBeforeSigning: showCustomizationBeforeSigning,
+                onImported: { app in
+                    if showCustomizationBeforeSigning { customizationApp = app }
+                }
+            )
         case let .failure(error):
             if (error as? CocoaError)?.code != .userCancelled {
                 library.reportImportError(error)

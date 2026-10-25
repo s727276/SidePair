@@ -11,11 +11,11 @@ struct ContentView: View {
     @StateObject private var connection = RSDConnectionModel()
     @StateObject private var signing = AppleSigningModel()
     @StateObject private var library = AppLibraryModel()
-    @State private var showingAppLibrary = false
+    @State private var navigationPath: [AquaSignRoute] = []
     @State private var isProcessingWidgetRefresh = false
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     introCard
@@ -36,23 +36,42 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    NavigationLink {
-                        AppLibraryView(connection: connection, signing: signing, pairingFileURL: pairing.pairingFileURL, library: library)
-                    } label: {
+                    NavigationLink(value: AquaSignRoute.appLibrary) {
                         Image(systemName: "square.stack.3d.up.fill")
                     }
                     .accessibilityLabel("App Library")
 
-                    NavigationLink {
-                        AppleSigningView(model: signing, connection: connection)
-                    } label: {
+                    NavigationLink(value: AquaSignRoute.appleSigning) {
                         Image(systemName: "person.badge.key.fill")
                     }
                     .accessibilityLabel("Apple signing")
                 }
             }
-            .navigationDestination(isPresented: $showingAppLibrary) {
-                AppLibraryView(connection: connection, signing: signing, pairingFileURL: pairing.pairingFileURL, library: library)
+            .navigationDestination(for: AquaSignRoute.self) { route in
+                switch route {
+                case .appLibrary:
+                    AppLibraryView(
+                        connection: connection,
+                        signing: signing,
+                        pairingFileURL: pairing.pairingFileURL,
+                        library: library,
+                        onNavigate: navigate,
+                        onPair: returnToPair
+                    )
+                case .appleSigning:
+                    AppleSigningView(
+                        model: signing,
+                        connection: connection,
+                        onNavigate: navigate,
+                        onPair: returnToPair
+                    )
+                case .settings:
+                    SettingsView(
+                        signing: signing,
+                        onNavigate: navigate,
+                        onPair: returnToPair
+                    )
+                }
             }
         }
         .tint(.blue)
@@ -66,6 +85,23 @@ struct ContentView: View {
         }
     }
 
+    private func navigate(to route: AquaSignRoute) {
+        switch route {
+        case .appLibrary:
+            navigationPath = [.appLibrary]
+        case .appleSigning:
+            navigationPath = [.appleSigning]
+        case .settings:
+            if navigationPath.last != .settings {
+                navigationPath.append(.settings)
+            }
+        }
+    }
+
+    private func returnToPair() {
+        navigationPath.removeAll()
+    }
+
     @MainActor
     private func processWidgetRefreshRequest() async {
         let appGroupID = "group.com.Andrewdev.aquasign.shared"
@@ -76,7 +112,7 @@ struct ContentView: View {
 
         defaults.set(false, forKey: requestKey)
         isProcessingWidgetRefresh = true
-        showingAppLibrary = true
+        navigationPath = [.appLibrary]
         defer { isProcessingWidgetRefresh = false }
 
         signing.restoreSessionIfAvailable()

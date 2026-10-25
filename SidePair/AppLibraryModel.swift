@@ -25,7 +25,35 @@ final class AppLibraryModel: ObservableObject {
         publishWidgetSnapshot()
     }
 
-    func importIPA(from sourceURL: URL, signing: AppleSigningModel, connection: RSDConnectionModel) {
+    var refreshableApps: [IPAAppMetadata] {
+        apps.filter { $0.installedAt != nil }
+    }
+
+    func isAquaSignApp(_ app: IPAAppMetadata) -> Bool {
+        let bundleIdentifier = app.bundleIdentifier.lowercased()
+        let aquaSignBundleID = "com.andrewdev.aquasign"
+        if bundleIdentifier == aquaSignBundleID { return true }
+
+        let teamScopedPrefix = "\(aquaSignBundleID)."
+        if bundleIdentifier.hasPrefix(teamScopedPrefix) {
+            let teamSuffix = bundleIdentifier.dropFirst(teamScopedPrefix.count)
+            if teamSuffix.count == 10,
+               teamSuffix.utf8.allSatisfy({ ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 122) }) {
+                return true
+            }
+        }
+
+        guard let currentBundleIdentifier = Bundle.main.bundleIdentifier?.lowercased() else { return false }
+        return bundleIdentifier == currentBundleIdentifier
+    }
+
+    func importIPA(
+        from sourceURL: URL,
+        signing: AppleSigningModel,
+        connection: RSDConnectionModel,
+        customizeBeforeSigning: Bool = false,
+        onImported: @escaping (IPAAppMetadata) -> Void = { _ in }
+    ) {
         guard !isBusy, !isRefreshingAll else { return }
         errorMessage = nil
         progress = 0
@@ -45,6 +73,12 @@ final class AppLibraryModel: ObservableObject {
                 }.value
                 upsert(prepared.metadata)
                 stageMessage = "IPA validated"
+                if customizeBeforeSigning {
+                    stageMessage = "IPA added. Review customization before signing."
+                    isBusy = false
+                    onImported(prepared.metadata)
+                    return
+                }
 
                 guard connection.isConnected else {
                     stageMessage = "IPA added. Connect the device to sign and install it."
@@ -104,6 +138,9 @@ final class AppLibraryModel: ObservableObject {
                 deviceUDID: deviceUDID
             )
             let profileExpiration = IPAArchiveInspector.profileExpiration(at: signedAppURL)
+                ?? (isAquaSignApp(app)
+                    ? signing.status.flatMap { IPAArchiveInspector.profileExpiration(from: $0.profileExpiration) }
+                    : nil)
             let extractionDirectory = signedAppURL.deletingLastPathComponent().deletingLastPathComponent()
             defer { try? FileManager.default.removeItem(at: extractionDirectory) }
 
@@ -137,7 +174,9 @@ final class AppLibraryModel: ObservableObject {
 
     func refreshAll(signing: AppleSigningModel, connection: RSDConnectionModel) async {
         guard !isBusy, !isRefreshingAll else { return }
-        let installedApps = apps.filter { $0.installedAt != nil }
+        let installedApps = refreshableApps.sorted {
+            !isAquaSignApp($0) && isAquaSignApp($1)
+        }
         guard !installedApps.isEmpty else {
             errorMessage = "There are no installed apps to refresh yet."
             return
@@ -186,8 +225,10 @@ final class AppLibraryModel: ObservableObject {
     private func upsert(_ app: IPAAppMetadata) {
         if let existing = apps.first(where: { $0.bundleIdentifier == app.bundleIdentifier }),
            existing.archiveFileName != app.archiveFileName {
-            let oldArchive = IPAArchiveInspector.archiveURL(for: existing)
-            try? FileManager.default.removeItem(at: oldArchive)
+            try? FileManager.default.removeItem(at: IPAArchiveInspector.archiveURL(named: existing.archiveFileName))
+            if let customizedArchiveFileName = existing.customizedArchiveFileName {
+                try? FileManager.default.removeItem(at: IPAArchiveInspector.archiveURL(named: customizedArchiveFileName))
+            }
         }
         apps.removeAll { $0.bundleIdentifier == app.bundleIdentifier }
         apps.insert(app, at: 0)
@@ -206,7 +247,25 @@ final class AppLibraryModel: ObservableObject {
         apps[index].lastError = error
         apps[index].installedAt = installedAt
         apps[index].profileExpiration = profileExpiration
+        if state == .installed, let customizedArchiveFileName = app.customizedArchiveFileName {
+            apps[index].displayName = app.displayName
+            apps[index].version = app.version
+            apps[index].customizedArchiveFileName = customizedArchiveFileName
+        }
         persist()
+    }
+
+    func activateCustomization(_ customizedApp: IPAAppMetadata) {
+        guard let index = apps.firstIndex(where: { $0.bundleIdentifier == customizedApp.bundleIdentifier }),
+              let customizedArchiveFileName = customizedApp.customizedArchiveFileName else { return }
+        let previousCustomizedArchive = apps[index].customizedArchiveFileName
+        apps[index].displayName = customizedApp.displayName
+        apps[index].version = customizedApp.version
+        apps[index].customizedArchiveFileName = customizedArchiveFileName
+        persist()
+        if let previousCustomizedArchive, previousCustomizedArchive != customizedArchiveFileName {
+            try? FileManager.default.removeItem(at: IPAArchiveInspector.archiveURL(named: previousCustomizedArchive))
+        }
     }
 
     func reportError(_ message: String) {
@@ -224,8 +283,7 @@ final class AppLibraryModel: ObservableObject {
     }
 
     private func publishWidgetSnapshot() {
-        let snapshot = apps
-            .filter { $0.installedAt != nil }
+        let snapshot = refreshableApps
             .map { WidgetAppSnapshot(displayName: $0.displayName, profileExpiration: $0.profileExpiration) }
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         UserDefaults(suiteName: appGroupID)?.set(data, forKey: widgetSnapshotKey)
