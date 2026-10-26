@@ -51,11 +51,13 @@ jobs:
       - name: Package unsigned IPA
         run: |
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/SidePair.app"
+          IPA_PATH="$RUNNER_TEMP/AquaSign-unsigned.ipa"
           test -d "$APP_PATH"
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           ditto "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/AquaSign.app"
-          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/ipa/Payload" "$RUNNER_TEMP/AquaSign-unsigned.ipa"
-          unzip -l "$RUNNER_TEMP/AquaSign-unsigned.ipa"
+          (cd "$RUNNER_TEMP/ipa" && /usr/bin/zip -q -r -y -X "$IPA_PATH" Payload)
+          unzip -t "$IPA_PATH"
+          unzip -l "$IPA_PATH"
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
