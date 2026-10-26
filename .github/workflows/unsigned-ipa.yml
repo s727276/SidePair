@@ -4,10 +4,13 @@ on:
   push:
     branches:
       - main
+  release:
+    types:
+      - published
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-unsigned-ipa:
@@ -59,10 +62,19 @@ jobs:
           unzip -t "$IPA_PATH"
           unzip -l "$IPA_PATH"
 
-      - name: Upload unsigned IPA
+      - name: Upload unsigned IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: AquaSign-unsigned-ipa
           path: ${{ runner.temp }}/AquaSign-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
+
+      - name: Attach direct IPA to the 1.2 release
+        if: github.event_name == 'release' && github.event.action == 'published' && github.event.release.tag_name == '1.2'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          IPA_PATH="$RUNNER_TEMP/AquaSign-unsigned.ipa"
+          gh release upload "$RELEASE_TAG" "$IPA_PATH#AquaSign-unsigned.ipa" --clobber

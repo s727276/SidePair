@@ -25,7 +25,7 @@ Your Apple ID password is sent to Apple for authentication and is not saved by A
 
 ## Build with GitHub Actions
 
-A push to `main` starts the **AquaSign unsigned IPA** workflow. It builds the Rust signing bridge and iOS app without Apple code signing, packages an unsigned IPA, and uploads it as the **AquaSign-unsigned-ipa** artifact. The workflow can also be started manually with `workflow_dispatch`; artifacts are retained for 14 days.
+A push to `main` starts the **AquaSign unsigned IPA** workflow. It builds the Rust signing bridge and iOS app without Apple code signing, packages an unsigned IPA, and uploads it as the **AquaSign-unsigned-ipa** artifact. Publishing a GitHub Release with the tag `1.2` also attaches the IPA as a direct release asset, alongside the Actions artifact. The workflow can also be started manually with `workflow_dispatch`; artifacts are retained for 14 days.
 
 Aqua Installer imports that unsigned AquaSign IPA, checks its bundle identifier, signs it locally with your Apple developer account, then installs the signed app to a wired iPhone with Apple's `devicectl`. Apple ID passwords and signing sessions are not uploaded to GitHub; the session is stored in the Mac's Keychain. Apple authentication uses the signing bridge's remote Anisette verification provider. The Mac needs an Xcode installation with `devicectl` available through `xcrun`, and the iPhone must be unlocked, paired with the Mac, and have Developer Mode enabled. Apple's signing and device/profile limits still apply.
 
