@@ -45,6 +45,10 @@ final class RSDConnectionModel: ObservableObject {
         return false
     }
 
+    var hasValidDeviceIP: Bool {
+        Self.isValidIPv4(deviceIP.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     var failureMessage: String? {
         if case let .failed(message) = state { return message }
         return nil

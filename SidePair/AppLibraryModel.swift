@@ -33,13 +33,51 @@ final class AppLibraryModel: ObservableObject {
     var refreshableApps: [IPAAppMetadata] {
         apps.filter {
             $0.installedAt != nil && $0.managedTeamID != nil
-                && (!isAquaSignApp($0) || aquaSignPreparationError == nil)
+                && (!isAquaSignApp($0) || hasCurrentSelfRefreshSource($0))
         }
     }
 
     func refreshableApps(forTeamID teamID: String?) -> [IPAAppMetadata] {
         guard let teamID = normalizedTeamID(teamID) else { return [] }
-        return refreshableApps.filter { normalizedTeamID($0.managedTeamID) == teamID }
+        return refreshableApps.filter { app in
+            guard normalizedTeamID(app.managedTeamID) == teamID else { return false }
+            let archiveURL = IPAArchiveInspector.archiveURL(
+                for: app,
+                preferSelfRefreshSource: isAquaSignApp(app)
+            )
+            return FileManager.default.fileExists(atPath: archiveURL.path)
+        }
+    }
+
+    func isRefreshable(_ app: IPAAppMetadata, forTeamID teamID: String?) -> Bool {
+        refreshableApps(forTeamID: teamID).contains { $0.bundleIdentifier == app.bundleIdentifier }
+    }
+
+    func refreshAvailabilityMessage(for app: IPAAppMetadata, teamID: String?) -> String {
+        guard let teamID = normalizedTeamID(teamID) else {
+            return "Sign in to your developer account to check refresh eligibility."
+        }
+        guard app.installedAt != nil else {
+            return "This app has not been confirmed as installed yet."
+        }
+        guard let managedTeamID = normalizedTeamID(app.managedTeamID) else {
+            return "The installed developer team could not be verified from AquaSign’s provisioning profile."
+        }
+        guard managedTeamID == teamID else {
+            return "This app is installed through a different developer team."
+        }
+        if isAquaSignApp(app), !hasCurrentSelfRefreshSource(app) {
+            return aquaSignPreparationError.map { "Could not prepare AquaSign’s current refresh package: \($0)" }
+                ?? "AquaSign’s current app bundle is being prepared as the refresh source."
+        }
+        let archiveURL = IPAArchiveInspector.archiveURL(
+            for: app,
+            preferSelfRefreshSource: isAquaSignApp(app)
+        )
+        guard FileManager.default.fileExists(atPath: archiveURL.path) else {
+            return "The saved refresh IPA is missing. Import or reinstall this app again."
+        }
+        return "Available for Refresh All with this developer team."
     }
 
     func isAquaSignApp(_ app: IPAAppMetadata) -> Bool {
@@ -70,13 +108,34 @@ final class AppLibraryModel: ObservableObject {
         return normalized.isEmpty ? nil : normalized
     }
 
+    private func hasCurrentSelfRefreshSource(_ app: IPAAppMetadata) -> Bool {
+        let currentBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"
+        guard app.selfRefreshBuildNumber == currentBuild,
+              let fileName = app.selfRefreshArchiveFileName else { return false }
+        return FileManager.default.fileExists(atPath: IPAArchiveInspector.archiveURL(named: fileName).path)
+    }
+
     private func prepareAquaSignEntryIfNeeded() {
-        guard aquaSignPreparationTask == nil,
-              !apps.contains(where: isAquaSignApp) else { return }
+        guard aquaSignPreparationTask == nil else { return }
+
+        let appBundleURL = Bundle.main.bundleURL
+        let buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"
+        let profileTeamID = IPAArchiveInspector.profileTeamIdentifier(at: appBundleURL)
+        let profileExpiration = IPAArchiveInspector.profileExpiration(at: appBundleURL)
+        reconcileRunningAquaSignMetadata(teamID: profileTeamID, profileExpiration: profileExpiration)
+
+        let existing = apps.first(where: isAquaSignApp)
+        let sourceFileName = existing?.selfRefreshArchiveFileName
+        let sourceExists = sourceFileName.map {
+            FileManager.default.fileExists(atPath: IPAArchiveInspector.archiveURL(named: $0).path)
+        } ?? false
+        guard existing == nil
+                || existing?.selfRefreshBuildNumber != buildNumber
+                || existing?.selfRefreshArchiveFileName == nil
+                || !sourceExists else { return }
 
         isPreparingAquaSignEntry = true
         aquaSignPreparationError = nil
-        let appBundleURL = Bundle.main.bundleURL
         aquaSignPreparationTask = Task { [weak self] in
             do {
                 let prepared = try await Task.detached(priority: .utility) {
@@ -86,10 +145,33 @@ final class AppLibraryModel: ObservableObject {
                     try? FileManager.default.removeItem(at: IPAArchiveInspector.archiveURL(for: prepared.metadata))
                     return
                 }
-                if self.apps.contains(where: self.isAquaSignApp) {
-                    try? FileManager.default.removeItem(at: IPAArchiveInspector.archiveURL(for: prepared.metadata))
+
+                if let index = self.apps.firstIndex(where: self.isAquaSignApp) {
+                    let existing = self.apps[index]
+                    var updated = existing
+                    updated.displayName = prepared.metadata.displayName
+                    updated.version = prepared.metadata.version
+                    updated.selfRefreshArchiveFileName = prepared.metadata.archiveFileName
+                    updated.selfRefreshBuildNumber = buildNumber
+                    updated.installState = .installed
+                    updated.installedAt = existing.installedAt ?? Date()
+                    updated.managedTeamID = prepared.metadata.managedTeamID
+                    updated.profileExpiration = prepared.metadata.profileExpiration
+                    if prepared.metadata.managedTeamID != nil { updated.lastError = nil }
+                    self.apps[index] = updated
+                    self.persist()
+
+                    if let previousSource = existing.selfRefreshArchiveFileName,
+                       previousSource != prepared.metadata.archiveFileName,
+                       previousSource != existing.archiveFileName,
+                       previousSource != existing.customizedArchiveFileName {
+                        try? FileManager.default.removeItem(at: IPAArchiveInspector.archiveURL(named: previousSource))
+                    }
                 } else {
-                    self.upsert(prepared.metadata)
+                    var metadata = prepared.metadata
+                    metadata.selfRefreshArchiveFileName = prepared.metadata.archiveFileName
+                    metadata.selfRefreshBuildNumber = buildNumber
+                    self.upsert(metadata)
                 }
                 self.isPreparingAquaSignEntry = false
                 self.aquaSignPreparationTask = nil
@@ -99,6 +181,19 @@ final class AppLibraryModel: ObservableObject {
                 self?.aquaSignPreparationTask = nil
             }
         }
+    }
+
+    private func reconcileRunningAquaSignMetadata(teamID: String?, profileExpiration: Date?) {
+        guard let index = apps.firstIndex(where: isAquaSignApp) else { return }
+        var app = apps[index]
+        app.installState = .installed
+        app.installedAt = app.installedAt ?? Date()
+        app.managedTeamID = normalizedTeamID(teamID)
+        app.profileExpiration = profileExpiration
+        if teamID != nil { app.lastError = nil }
+        guard app != apps[index] else { return }
+        apps[index] = app
+        persist()
     }
 
     func importIPA(
@@ -153,7 +248,8 @@ final class AppLibraryModel: ObservableObject {
         connection: RSDConnectionModel,
         isPartOfRefreshAll: Bool = false,
         progressOffset: Int = 0,
-        totalCount: Int = 1
+        totalCount: Int = 1,
+        preferSelfRefreshSource: Bool = false
     ) async throws {
         guard !isBusy, (!isRefreshingAll || isPartOfRefreshAll) else {
             throw IPAAppLibraryError.operationInProgress
@@ -162,7 +258,11 @@ final class AppLibraryModel: ObservableObject {
             errorMessage = "Connect the device through LocalDevVPN before installing."
             throw IPAAppLibraryError.connectionRequired
         }
-        let archiveURL = IPAArchiveInspector.archiveURL(for: app)
+        let isAquaSignSelfRefresh = isAquaSignApp(app)
+        let archiveURL = IPAArchiveInspector.archiveURL(
+            for: app,
+            preferSelfRefreshSource: preferSelfRefreshSource && isAquaSignSelfRefresh
+        )
         guard FileManager.default.fileExists(atPath: archiveURL.path) else {
             errorMessage = "The saved IPA is missing. Choose the file again from Files."
             throw IPAAppLibraryError.missingArchive
@@ -187,6 +287,7 @@ final class AppLibraryModel: ObservableObject {
             if !isPartOfRefreshAll { stageMessage = nil }
         }
 
+        var stagedSelfRefresh = false
         do {
             guard let deviceDetails = connection.deviceDetails,
                   let deviceUDID = deviceDetails.udid,
@@ -211,6 +312,24 @@ final class AppLibraryModel: ObservableObject {
             let signedIPAURL = try IPAArchiveInspector.packageSignedApp(at: signedAppURL)
             defer { try? FileManager.default.removeItem(at: signedIPAURL.deletingLastPathComponent()) }
 
+            if isAquaSignSelfRefresh {
+                guard let teamID = normalizedTeamID(signing.status?.teamId) else {
+                    throw IPAAppLibraryError.selfRefreshRecoveryUnavailable("The signed-in developer team could not be verified.")
+                }
+                do {
+                    try stagePendingSelfRefresh(
+                        app: app,
+                        teamID: teamID,
+                        profileExpiration: profileExpiration
+                    )
+                    stagedSelfRefresh = true
+                } catch let recoveryError as IPAAppLibraryError {
+                    throw recoveryError
+                } catch {
+                    throw IPAAppLibraryError.selfRefreshRecoveryUnavailable(error.localizedDescription)
+                }
+            }
+
             try await connection.installIPA(from: signedIPAURL) { [weak self] fraction, stage in
                 guard let self else { return }
                 let appProgress = min(max(fraction, 0), 1)
@@ -229,11 +348,13 @@ final class AppLibraryModel: ObservableObject {
                 profileExpiration: profileExpiration,
                 managedTeamID: signing.status?.teamId
             )
+            if stagedSelfRefresh { clearPendingSelfRefresh() }
             progress = isPartOfRefreshAll
                 ? Double(progressOffset + 1) / Double(max(totalCount, 1))
                 : 1
             if !isPartOfRefreshAll { stageMessage = "Signed and installed" }
         } catch {
+            if stagedSelfRefresh { clearPendingSelfRefresh() }
             update(
                 app,
                 state: .failed,
@@ -245,6 +366,70 @@ final class AppLibraryModel: ObservableObject {
             errorMessage = error.localizedDescription
             throw error
         }
+    }
+
+    func reconcilePendingSelfRefresh() {
+        guard let fileURL = pendingSelfRefreshURL else { return }
+        guard let data = try? Data(contentsOf: fileURL) else { return }
+        guard let pending = try? JSONDecoder().decode(PendingSelfRefresh.self, from: data) else {
+            try? FileManager.default.removeItem(at: fileURL)
+            return
+        }
+        defer { clearPendingSelfRefresh() }
+
+        guard let index = apps.firstIndex(where: { $0.bundleIdentifier == pending.bundleIdentifier })
+                ?? apps.firstIndex(where: isAquaSignApp) else { return }
+        let currentBundleURL = Bundle.main.bundleURL.standardizedFileURL
+        let currentTeamID = normalizedTeamID(IPAArchiveInspector.profileTeamIdentifier(at: currentBundleURL))
+        let currentExpiration = IPAArchiveInspector.profileExpiration(at: currentBundleURL)
+        let didReplaceBundle = currentBundleURL.path != pending.previousBundlePath
+        let didInstallExpectedProfile: Bool
+        if let expectedExpiration = pending.profileExpiration, let currentExpiration {
+            didInstallExpectedProfile = abs(currentExpiration.timeIntervalSince(expectedExpiration)) <= 120
+        } else {
+            didInstallExpectedProfile = false
+        }
+        var app = apps[index]
+        if currentTeamID == normalizedTeamID(pending.teamID), didReplaceBundle || didInstallExpectedProfile {
+            app.installState = .installed
+            app.lastError = nil
+            app.installedAt = Date()
+            app.managedTeamID = pending.teamID
+            app.profileExpiration = currentExpiration ?? pending.profileExpiration
+        } else {
+            app.installState = .failed
+            app.lastError = "AquaSign restarted, but its refreshed provisioning profile could not be confirmed. Reconnect and try Refresh & reinstall again."
+        }
+        apps[index] = app
+        persist()
+    }
+
+    private var pendingSelfRefreshURL: URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)?
+            .appendingPathComponent("AquaSignPendingSelfRefresh.json")
+    }
+
+    private func stagePendingSelfRefresh(
+        app: IPAAppMetadata,
+        teamID: String,
+        profileExpiration: Date?
+    ) throws {
+        guard let fileURL = pendingSelfRefreshURL else {
+            throw IPAAppLibraryError.selfRefreshRecoveryUnavailable("AquaSign could not access its shared recovery storage.")
+        }
+        let pending = PendingSelfRefresh(
+            bundleIdentifier: app.bundleIdentifier,
+            teamID: teamID,
+            previousBundlePath: Bundle.main.bundleURL.standardizedFileURL.path,
+            profileExpiration: profileExpiration
+        )
+        let data = try JSONEncoder().encode(pending)
+        try data.write(to: fileURL, options: .atomic)
+    }
+
+    private func clearPendingSelfRefresh() {
+        guard let fileURL = pendingSelfRefreshURL else { return }
+        try? FileManager.default.removeItem(at: fileURL)
     }
 
     func refreshAll(signing: AppleSigningModel, connection: RSDConnectionModel) async {
@@ -280,7 +465,8 @@ final class AppLibraryModel: ObservableObject {
                     connection: connection,
                     isPartOfRefreshAll: true,
                     progressOffset: index,
-                    totalCount: installedApps.count
+                    totalCount: installedApps.count,
+                    preferSelfRefreshSource: isAquaSignApp(app)
                 )
                 refreshedCount += 1
             } catch {
@@ -297,12 +483,24 @@ final class AppLibraryModel: ObservableObject {
         }
     }
 
-    private func upsert(_ app: IPAAppMetadata) {
-        if let existing = apps.first(where: { $0.bundleIdentifier == app.bundleIdentifier }),
-           existing.archiveFileName != app.archiveFileName {
-            try? FileManager.default.removeItem(at: IPAArchiveInspector.archiveURL(named: existing.archiveFileName))
-            if let customizedArchiveFileName = existing.customizedArchiveFileName {
-                try? FileManager.default.removeItem(at: IPAArchiveInspector.archiveURL(named: customizedArchiveFileName))
+    private func upsert(_ incomingApp: IPAAppMetadata) {
+        var app = incomingApp
+        if let existing = apps.first(where: { $0.bundleIdentifier == app.bundleIdentifier }) {
+            if isAquaSignApp(app) {
+                app.selfRefreshArchiveFileName = existing.selfRefreshArchiveFileName
+                app.selfRefreshBuildNumber = existing.selfRefreshBuildNumber
+                app.managedTeamID = existing.managedTeamID
+                app.installedAt = existing.installedAt
+                app.profileExpiration = existing.profileExpiration
+            }
+            if existing.archiveFileName != app.archiveFileName {
+                if existing.archiveFileName != existing.selfRefreshArchiveFileName {
+                    try? FileManager.default.removeItem(at: IPAArchiveInspector.archiveURL(named: existing.archiveFileName))
+                }
+                if let customizedArchiveFileName = existing.customizedArchiveFileName,
+                   customizedArchiveFileName != app.customizedArchiveFileName {
+                    try? FileManager.default.removeItem(at: IPAArchiveInspector.archiveURL(named: customizedArchiveFileName))
+                }
             }
         }
         apps.removeAll { $0.bundleIdentifier == app.bundleIdentifier }
@@ -373,11 +571,19 @@ private struct WidgetAppSnapshot: Encodable {
     let profileExpiration: Date?
 }
 
+private struct PendingSelfRefresh: Codable {
+    let bundleIdentifier: String
+    let teamID: String
+    let previousBundlePath: String
+    let profileExpiration: Date?
+}
+
 private enum IPAAppLibraryError: LocalizedError {
     case connectionRequired
     case missingArchive
     case missingDeviceIdentifier
     case operationInProgress
+    case selfRefreshRecoveryUnavailable(String)
 
     var errorDescription: String? {
         switch self {
@@ -389,6 +595,8 @@ private enum IPAAppLibraryError: LocalizedError {
             "Could not read this iPhone's device identifier over the Remote Pairing connection. Reconnect the device and try again."
         case .operationInProgress:
             "Another app refresh or installation is already in progress."
+        case let .selfRefreshRecoveryUnavailable(message):
+            "AquaSign could not safely prepare recovery for its self-refresh: \(message) No install was started."
         }
     }
 }

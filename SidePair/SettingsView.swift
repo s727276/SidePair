@@ -3,14 +3,16 @@ import SwiftUI
 enum AquaSignRoute: Hashable {
     case appLibrary
     case appleSigning
+    case developerAppIDs
     case settings
 }
 
 struct SettingsView: View {
     @ObservedObject var signing: AppleSigningModel
     @AppStorage("sidepairShowIPACustomizationBeforeSigning") private var showCustomizationBeforeSigning = false
+    @AppStorage("sidepairShowSettingsInTabBar") private var showSettingsInTabBar = false
     let onNavigate: (AquaSignRoute) -> Void
-    let onPair: () -> Void
+    let onOpenSettings: () -> Void
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unavailable"
@@ -25,7 +27,9 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 22) {
                 header
                 signingIdentityCard
+                developerAppIDsCard
                 versionCard
+                tabNavigationCard
                 customizationCard
             }
             .padding(.horizontal, 20)
@@ -33,25 +37,28 @@ struct SettingsView: View {
             .padding(.bottom, 24)
         }
         .background(Color(red: 0.95, green: 0.97, blue: 1).ignoresSafeArea())
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            tabBar
-                .padding(.horizontal, 18)
-                .padding(.top, 8)
-                .padding(.bottom, 8)
-                .background(.clear)
-        }
         .toolbar(.hidden, for: .navigationBar)
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("Settings")
-                .font(.system(size: 34, weight: .bold, design: .rounded))
-                .tracking(-0.5)
-                .foregroundStyle(Color(red: 0.08, green: 0.13, blue: 0.25))
-            Text("App information")
-                .font(.system(size: 18))
-                .foregroundStyle(.secondary)
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Settings")
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .tracking(-0.5)
+                    .foregroundStyle(Color(red: 0.08, green: 0.13, blue: 0.25))
+                Text("App information")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(action: onOpenSettings) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 42, height: 42)
+                    .background(.regularMaterial, in: Circle())
+            }
+            .accessibilityLabel("Settings")
         }
         .padding(.horizontal, 8)
     }
@@ -76,6 +83,8 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    Button("Manage Apple signing") { onNavigate(.appleSigning) }
+                        .font(.caption.weight(.semibold))
                 } else {
                     Text("No Apple developer team loaded")
                         .font(.subheadline)
@@ -112,6 +121,39 @@ struct SettingsView: View {
         return "iPhone Developer: \(teamName) (\(teamID))"
     }
 
+    private var developerAppIDsCard: some View {
+        Button {
+            onNavigate(.developerAppIDs)
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "shippingbox")
+                    .font(.system(size: 23, weight: .medium))
+                    .foregroundStyle(Color.blue)
+                    .frame(width: 52, height: 52)
+                    .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Developer App IDs")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text("Browse IDs registered to your team")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(16)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(.white.opacity(0.7), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
     private var versionCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("App version")
@@ -122,6 +164,28 @@ struct SettingsView: View {
             settingsRow("Build", value: buildNumber)
         }
         .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(.white.opacity(0.7), lineWidth: 1)
+        }
+    }
+
+    private var tabNavigationCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(isOn: $showSettingsInTabBar) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Show Settings in tab bar")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Add Settings as a bottom tab. The top-right gear remains available either way.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .tint(.blue)
+        }
+        .padding(18)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -163,32 +227,4 @@ struct SettingsView: View {
         .font(.subheadline)
     }
 
-    private var tabBar: some View {
-        HStack(spacing: 4) {
-            tabItem("Pair", symbol: "rectangle.on.rectangle", selected: false) { onPair() }
-            tabItem("App Library", symbol: "square.stack.3d.up.fill", selected: false) { onNavigate(.appLibrary) }
-            tabItem("Settings", symbol: "gearshape.fill", selected: true) {}
-        }
-        .padding(8)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay { Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1) }
-        .shadow(color: .black.opacity(0.08), radius: 14, y: 5)
-    }
-
-    private func tabItem(_ title: String, symbol: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: symbol)
-                    .font(.system(size: 20, weight: .semibold))
-                Text(title)
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .foregroundStyle(selected ? Color.blue : Color.secondary)
-            .frame(maxWidth: .infinity)
-            .frame(height: 62)
-            .background { if selected { Capsule().fill(Color(uiColor: .tertiarySystemGroupedBackground)) } }
-        }
-        .buttonStyle(.plain)
-        .disabled(selected)
-    }
 }

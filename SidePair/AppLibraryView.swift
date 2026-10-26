@@ -4,23 +4,20 @@ import UniformTypeIdentifiers
 struct AppLibraryView: View {
     @ObservedObject var connection: RSDConnectionModel
     @ObservedObject var signing: AppleSigningModel
-    let pairingFileURL: URL?
     @ObservedObject var library: AppLibraryModel
-    let onNavigate: (AquaSignRoute) -> Void
-    let onPair: () -> Void
+    let onOpenSettings: () -> Void
     @AppStorage("sidepairShowIPACustomizationBeforeSigning") private var showCustomizationBeforeSigning = false
     @State private var showingImporter = false
     @State private var customizationApp: IPAAppMetadata?
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 14) {
                 header
-                signingNote
-                refreshAllCard
+                refreshOverview
 
                 if library.apps.isEmpty {
-                    emptyLibraryCard
+                    emptyState
                 } else {
                     appList
                 }
@@ -44,20 +41,13 @@ struct AppLibraryView: View {
                         .padding(.horizontal, 4)
                 }
 
-                connectionCard
+                addIPAButton
             }
             .padding(.horizontal, 20)
-            .padding(.top, 32)
-            .padding(.bottom, 24)
+            .padding(.top, 24)
+            .padding(.bottom, 20)
         }
-        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            tabBar
-                .padding(.horizontal, 18)
-                .padding(.top, 8)
-                .padding(.bottom, 8)
-                .background(.clear)
-        }
+        .background(signingBackground)
         .toolbar(.hidden, for: .navigationBar)
         .fileImporter(
             isPresented: $showingImporter,
@@ -76,127 +66,85 @@ struct AppLibraryView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("App Library")
+        HStack(alignment: .center) {
+            Text("Signing")
                 .font(.system(size: 34, weight: .bold, design: .rounded))
                 .tracking(-0.5)
-                .foregroundStyle(Color.primary)
-            Text("Apps ready for this iPhone")
-                .font(.system(size: 18))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color(red: 0.06, green: 0.11, blue: 0.22))
+            Spacer()
+            Button(action: onOpenSettings) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.48, green: 0.55, blue: 0.68))
+                    .frame(width: 46, height: 46)
+                    .background(.regularMaterial, in: Circle())
+                    .overlay { Circle().stroke(.white.opacity(0.7), lineWidth: 1) }
+            }
+            .accessibilityLabel("Settings")
         }
         .padding(.horizontal, 8)
     }
 
-    private var signingNote: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label(
-                    signing.status == nil ? "Apple account needed" : "Apple account ready",
-                    systemImage: signing.status == nil ? "person.crop.circle.badge.exclamationmark" : "checkmark.circle.fill"
-                )
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(signing.status == nil ? .orange : .green)
-                Spacer()
-                Button(signing.status == nil ? "Sign in" : "Manage") {
-                    onNavigate(.appleSigning)
+    private var refreshOverview: some View {
+        let readyApps = library.refreshableApps(forTeamID: signing.status?.teamId)
+        return VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 15) {
+                Image(systemName: "square.stack.3d.up.fill")
+                    .font(.system(size: 30, weight: .medium))
+                    .foregroundStyle(Color(red: 0.48, green: 0.58, blue: 0.77))
+                    .frame(width: 66, height: 66)
+                    .background(Color(red: 0.91, green: 0.94, blue: 0.99), in: Circle())
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(readyApps.count == 1 ? "1 app ready" : "\(readyApps.count) apps ready")
+                        .font(.system(size: 21, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color(red: 0.08, green: 0.13, blue: 0.25))
+                    TimelineView(.periodic(from: .now, by: 60)) { context in
+                        Text(nextExpiryDescription(for: readyApps, at: context.date))
+                            .font(.system(size: 16))
+                            .foregroundStyle(Color(red: 0.47, green: 0.53, blue: 0.66))
+                    }
                 }
-                .font(.subheadline.weight(.semibold))
+                Spacer(minLength: 0)
             }
-            Text("AquaSign signs imported IPAs with your Apple ID and refreshes them with a newly issued provisioning profile before reinstalling. Personal provisioning uses a team-scoped bundle ID. Free personal profiles commonly last seven days; Apple sets the exact expiration. Some apps or capabilities may not be eligible for your team.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(16)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-    }
-
-    private var refreshAllCard: some View {
-        let installedApps = library.refreshableApps(forTeamID: signing.status?.teamId)
-        return VStack(alignment: .leading, spacing: 13) {
-            HStack {
-                Label("Refresh all apps", systemImage: "arrow.clockwise")
-                    .font(.headline)
-                Spacer()
-                Text("\(installedApps.count) to refresh")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
-
-            Text("Only apps installed through your signed-in developer team are included. Requires LocalDevVPN and your saved Apple signing session. Reinstall other library apps to enroll them.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
 
             if library.isPreparingAquaSignEntry {
-                Label("Adding AquaSign to your library…", systemImage: "arrow.down.doc")
+                Label("Preparing AquaSign for refresh…", systemImage: "arrow.triangle.2.circlepath")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if let error = library.aquaSignPreparationError {
-                Label("Could not add AquaSign: \(error)", systemImage: "exclamationmark.triangle.fill")
+                Label("AquaSign refresh source unavailable: \(error)", systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if library.apps.contains(where: library.isAquaSignApp),
-               !installedApps.contains(where: library.isAquaSignApp) {
-                Label("AquaSign must be signed and installed through this developer team before Refresh All can include it.", systemImage: "info.circle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if installedApps.contains(where: library.isAquaSignApp) {
-                Label("AquaSign refreshes last and may close while iOS replaces it.", systemImage: "info.circle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let nextExpiringApp = nextExpiringApp {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("\(nextExpiringApp.displayName) profile expires in")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(expirationCountdown(nextExpiringApp.profileExpiration!, at: context.date))
-                            .font(.system(.title3, design: .rounded, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(.primary)
-                        Text("Exact expiry · \(expirationTimestamp(nextExpiringApp.profileExpiration!))")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            } else {
-                Text(installedApps.isEmpty
-                     ? "Install an app through this developer team to enable Refresh All. AquaSign refreshes last when eligible."
-                     : "Profile expiry will appear after AquaSign reads a signed app profile.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             Button {
                 Task { await library.refreshAll(signing: signing, connection: connection) }
             } label: {
-                Label(library.isRefreshingAll ? "Refreshing apps…" : "Refresh all", systemImage: "arrow.clockwise")
-                    .font(.subheadline.weight(.semibold))
+                Text(library.isRefreshingAll ? "Refreshing…" : "Refresh All")
+                    .font(.system(size: 16, weight: .semibold))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.blue, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .frame(height: 48)
+                    .background(Color(red: 0.13, green: 0.49, blue: 0.96), in: Capsule())
                     .foregroundStyle(.white)
+                    .shadow(color: .blue.opacity(0.18), radius: 8, y: 4)
             }
             .buttonStyle(.plain)
-            .disabled(library.isBusy || library.isRefreshingAll || installedApps.isEmpty)
+            .disabled(library.isBusy || library.isRefreshingAll || readyApps.isEmpty)
         }
-        .padding(16)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(18)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(.white.opacity(0.78), lineWidth: 1)
+        }
+        .shadow(color: .blue.opacity(0.08), radius: 18, y: 7)
     }
 
     private var nextExpiringApp: IPAAppMetadata? {
-        let appsWithExpiration = library.refreshableApps(forTeamID: signing.status?.teamId).filter { $0.profileExpiration != nil }
+        let appsWithExpiration = library.refreshableApps(forTeamID: signing.status?.teamId)
+            .filter { $0.profileExpiration != nil }
         let now = Date()
         return appsWithExpiration
             .filter { ($0.profileExpiration ?? .distantPast) > now }
@@ -204,178 +152,208 @@ struct AppLibraryView: View {
             ?? appsWithExpiration.max { ($0.profileExpiration ?? .distantPast) < ($1.profileExpiration ?? .distantPast) }
     }
 
-    private func expirationCountdown(_ expiration: Date, at now: Date) -> String {
-        let timeRemaining = expiration.timeIntervalSince(now)
-        guard timeRemaining > 0 else { return "Expired" }
-        let secondsRemaining = Int(timeRemaining.rounded(.up))
-        let days = secondsRemaining / 86_400
-        let hours = (secondsRemaining % 86_400) / 3_600
-        let minutes = (secondsRemaining % 3_600) / 60
-        let seconds = secondsRemaining % 60
-        return "\(days)d \(hours)h \(minutes)m \(seconds)s"
+    private func nextExpiryDescription(for apps: [IPAAppMetadata], at date: Date) -> String {
+        guard let app = nextExpiringApp, apps.contains(where: { $0.bundleIdentifier == app.bundleIdentifier }),
+              let expiration = app.profileExpiration else { return "Next expiry · —" }
+        let label = expirationSummary(expiration, at: date)
+        return label.replacingOccurrences(of: "Expires in ", with: "Next expiry · ")
     }
 
-    private func expirationTimestamp(_ expiration: Date) -> String {
-        expiration.formatted(.dateTime.month(.abbreviated).day().year().hour().minute().second())
+    private func expirationSummary(_ expiration: Date, at date: Date) -> String {
+        let remaining = expiration.timeIntervalSince(date)
+        guard remaining > 0 else { return "Expired" }
+        let days = max(Int(ceil(remaining / 86_400)), 1)
+        return "Expires in \(days) \(days == 1 ? "day" : "days")"
     }
 
-    private var emptyLibraryCard: some View {
-        VStack(spacing: 18) {
+    private var signingBackground: some View {
+        GeometryReader { geometry in
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.90, green: 0.94, blue: 0.99),
+                        Color(red: 0.98, green: 0.99, blue: 1.00),
+                        Color(red: 0.90, green: 0.95, blue: 1.00)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                Circle()
+                    .fill(.white.opacity(0.30))
+                    .frame(width: geometry.size.width * 0.90)
+                    .offset(x: -geometry.size.width * 0.46, y: -geometry.size.height * 0.40)
+                Ellipse()
+                    .fill(Color.blue.opacity(0.035))
+                    .frame(width: geometry.size.width * 1.2, height: geometry.size.height * 0.48)
+                    .rotationEffect(.degrees(-18))
+                    .offset(x: geometry.size.width * 0.34, y: geometry.size.height * 0.40)
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
             Image(systemName: "shippingbox.fill")
-                .font(.system(size: 43, weight: .medium))
-                .foregroundStyle(Color(red: 0.53, green: 0.61, blue: 0.77))
-                .frame(width: 112, height: 112)
-                .background(Color(uiColor: .tertiarySystemGroupedBackground), in: Circle())
-
-            VStack(spacing: 7) {
-                Text("Your library is ready")
-                    .font(.system(size: 22, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.primary)
-                Text("Choose any IPA. AquaSign signs it with your Apple ID and installs it over your paired connection.")
-                    .font(.system(size: 17))
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Button {
-                showingImporter = true
-            } label: {
-                Text("Choose IPA")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 58)
-                    .background(Color.blue, in: Capsule())
-                    .shadow(color: .blue.opacity(0.18), radius: 8, y: 4)
-            }
-            .buttonStyle(.plain)
-            .disabled(library.isBusy || library.isRefreshingAll)
+                .font(.system(size: 32, weight: .medium))
+                .foregroundStyle(Color(red: 0.48, green: 0.58, blue: 0.77))
+                .frame(width: 70, height: 70)
+                .background(.white.opacity(0.55), in: Circle())
+            Text("No apps yet")
+                .font(.system(size: 19, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color(red: 0.08, green: 0.13, blue: 0.25))
+            Text("Add an IPA to sign and install on this iPhone.")
+                .font(.subheadline)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 22)
-        .padding(.vertical, 30)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .stroke(Color(uiColor: .separator).opacity(0.35), lineWidth: 1)
-        }
-        .shadow(color: .blue.opacity(0.06), radius: 18, y: 7)
+        .padding(.vertical, 26)
+        .padding(.horizontal, 20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 
     private var appList: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            Text("Your apps")
-                .font(.headline)
-                .padding(.horizontal, 4)
+        VStack(spacing: 12) {
             ForEach(library.apps) { app in
-                appCard(app)
+                appRow(app)
             }
-            Button {
-                showingImporter = true
-            } label: {
-                Label("Choose another IPA", systemImage: "plus")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 13)
-                    .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .disabled(library.isBusy || library.isRefreshingAll)
         }
     }
 
-    private func appCard(_ app: IPAAppMetadata) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "app.fill")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(.blue)
-                    .frame(width: 46, height: 46)
-                    .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(app.displayName)
-                        .font(.headline)
-                    Text("Original ID · \(app.bundleIdentifier)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Text("Version \(app.version)")
+    private func appRow(_ app: IPAAppMetadata) -> some View {
+        let isRefreshable = library.isRefreshable(app, forTeamID: signing.status?.teamId)
+        let isAquaSign = library.isAquaSignApp(app)
+        let sourceURL = IPAArchiveInspector.archiveURL(
+            for: app,
+            preferSelfRefreshSource: isAquaSign && app.customizedArchiveFileName == nil
+        )
+        let hasSource = FileManager.default.fileExists(atPath: sourceURL.path)
+        let actionTitle = showCustomizationBeforeSigning
+            ? "Review"
+            : (app.installedAt == nil ? "Sign" : (isRefreshable ? "Refresh" : "Reinstall"))
+
+        return HStack(spacing: 12) {
+            Image(systemName: appIconSymbol(for: app))
+                .font(.system(size: 27, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 56, height: 56)
+                .background(appIconColor(for: app), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(app.displayName)
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color(red: 0.08, green: 0.13, blue: 0.25))
+                    .lineLimit(1)
+                if let expiration = app.profileExpiration {
+                    TimelineView(.periodic(from: .now, by: 60)) { context in
+                        Text(expirationSummary(expiration, at: context.date))
+                            .font(.system(size: 14))
+                            .foregroundStyle(expiration > context.date ? Color(red: 0.46, green: 0.52, blue: 0.64) : Color.orange)
+                    }
+                } else {
+                    Text(app.installedAt == nil ? "Ready to sign" : "Profile expiry unavailable")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color(red: 0.46, green: 0.52, blue: 0.64))
+                }
+                if !isRefreshable {
+                    Text(refreshReason(for: app, hasSource: hasSource))
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(2)
                 }
-                Spacer(minLength: 4)
-                Text(app.installState.label)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(app.installState.color)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
-                    .background(app.installState.color.opacity(0.1), in: Capsule())
-            }
-
-            if let expiration = app.profileExpiration {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Profile expires in \(expirationCountdown(expiration, at: context.date))")
-                            .font(.caption.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(expiration > context.date ? Color.secondary : Color.orange)
-                        Text("Exact expiry · \(expirationTimestamp(expiration))")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+                if let lastError = app.lastError, !lastError.isEmpty {
+                    Text(lastError)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
                 }
-            } else if app.installedAt != nil {
-                Label("Could not read this app's profile expiry", systemImage: "clock")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            if let lastError = app.lastError, !lastError.isEmpty {
-                Text(lastError)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
+            Button {
+                customizationApp = app
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.28, green: 0.48, blue: 0.75))
+                    .frame(width: 34, height: 38)
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Customize \(app.displayName)")
+            .disabled(library.isBusy || library.isRefreshingAll)
 
-            HStack(spacing: 10) {
-                Button {
+            Button {
+                if showCustomizationBeforeSigning {
                     customizationApp = app
-                } label: {
-                    Label("Customize", systemImage: "slider.horizontal.3")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                }
-                .buttonStyle(.bordered)
-                .disabled(library.isBusy || library.isRefreshingAll)
-
-                Button {
-                    if showCustomizationBeforeSigning {
-                        customizationApp = app
-                    } else {
-                        Task { try? await library.install(app, signing: signing, connection: connection) }
+                } else {
+                    Task {
+                        try? await library.install(
+                            app,
+                            signing: signing,
+                            connection: connection,
+                            preferSelfRefreshSource: isAquaSign && app.customizedArchiveFileName == nil
+                        )
                     }
-                } label: {
-                    Label(
-                        showCustomizationBeforeSigning
-                            ? "Review & Sign"
-                            : (library.isBusy ? "Working…" : (app.installedAt != nil ? "Refresh & reinstall" : "Sign & install")),
-                        systemImage: showCustomizationBeforeSigning
-                            ? "slider.horizontal.3"
-                            : (app.installedAt != nil ? "arrow.clockwise" : "arrow.down.to.line")
-                    )
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.blue, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .foregroundStyle(.white)
                 }
-                .buttonStyle(.plain)
-                .disabled(library.isBusy || library.isRefreshingAll)
+            } label: {
+                Text(library.isBusy ? "Working…" : actionTitle)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(hasSource ? Color(red: 0.13, green: 0.48, blue: 0.84) : Color.secondary)
+                    .frame(minWidth: 78)
+                    .padding(.horizontal, 11)
+                    .frame(height: 40)
+                    .background(.white.opacity(0.48), in: Capsule())
             }
+            .buttonStyle(.plain)
+            .disabled(library.isBusy || library.isRefreshingAll || !hasSource)
         }
-        .padding(16)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .padding(.horizontal, 15)
+        .padding(.vertical, 13)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 25, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 25, style: .continuous)
+                .stroke(.white.opacity(0.78), lineWidth: 1)
+        }
+        .shadow(color: .blue.opacity(0.045), radius: 12, y: 5)
+    }
+
+    private func appIconSymbol(for app: IPAAppMetadata) -> String {
+        let name = app.displayName.lowercased()
+        if name.contains("aqua") { return "drop.fill" }
+        if name.contains("note") { return "leaf.fill" }
+        if name.contains("map") { return "mountain.2.fill" }
+        return "app.fill"
+    }
+
+    private func appIconColor(for app: IPAAppMetadata) -> Color {
+        let name = app.displayName.lowercased()
+        if name.contains("aqua") { return Color(red: 0.18, green: 0.60, blue: 0.95) }
+        if name.contains("note") { return Color(red: 0.38, green: 0.77, blue: 0.33) }
+        if name.contains("map") { return Color(red: 0.58, green: 0.34, blue: 0.86) }
+        return Color(red: 0.30, green: 0.55, blue: 0.86)
+    }
+
+    private func refreshReason(for app: IPAAppMetadata, hasSource: Bool) -> String {
+        guard hasSource else { return "The saved IPA is missing. Add it again from Files." }
+        return library.refreshAvailabilityMessage(for: app, teamID: signing.status?.teamId)
+    }
+
+    private var addIPAButton: some View {
+        Button {
+            showingImporter = true
+        } label: {
+            Text("Add IPA")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 52)
+                .background(Color(red: 0.13, green: 0.49, blue: 0.96), in: Capsule())
+                .shadow(color: .blue.opacity(0.18), radius: 9, y: 4)
+        }
+        .buttonStyle(.plain)
+        .disabled(library.isBusy || library.isRefreshingAll)
     }
 
     private var progressCard: some View {
@@ -393,73 +371,7 @@ struct AppLibraryView: View {
                 .tint(.blue)
         }
         .padding(16)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private var connectionCard: some View {
-        HStack(spacing: 13) {
-            Image(systemName: "iphone")
-                .font(.system(size: 21, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 48, height: 48)
-                .background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Device connection")
-                    .font(.subheadline.weight(.semibold))
-                Text(connectionDescription)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 4)
-            Button(connection.isConnected ? "Disconnect" : "Connect") {
-                if connection.isConnected {
-                    connection.disconnect()
-                } else {
-                    connection.connect(using: pairingFileURL)
-                }
-            }
-            .font(.subheadline.weight(.semibold))
-            .buttonStyle(.bordered)
-            .disabled(connection.isConnecting || connection.isInstalling || (!connection.isConnected && pairingFileURL == nil))
-        }
-        .padding(16)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-    }
-
-    private var connectionDescription: String {
-        if connection.isInstalling { return "Installing app…" }
-        if connection.isConnected { return "Connected through LocalDevVPN" }
-        if connection.isConnecting { return "Connecting…" }
-        if case .failed = connection.state { return "Connection needs attention" }
-        return "Not connected"
-    }
-
-    private var tabBar: some View {
-        HStack(spacing: 4) {
-            tabItem("Pair", symbol: "rectangle.on.rectangle", selected: false, action: onPair)
-            tabItem("App Library", symbol: "square.stack.3d.up.fill", selected: true) {}
-            tabItem("Settings", symbol: "gearshape", selected: false) { onNavigate(.settings) }
-        }
-        .padding(8)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay { Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1) }
-        .shadow(color: .black.opacity(0.08), radius: 14, y: 5)
-    }
-
-    private func tabItem(_ title: String, symbol: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: symbol).font(.system(size: 20, weight: .semibold))
-                Text(title).font(.system(size: 11, weight: .medium))
-            }
-            .foregroundStyle(selected ? Color.blue : Color.secondary)
-            .frame(maxWidth: .infinity)
-            .frame(height: 62)
-            .background { if selected { Capsule().fill(Color(uiColor: .tertiarySystemGroupedBackground)) } }
-        }
-        .buttonStyle(.plain)
-        .disabled(selected)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private var ipaContentType: UTType {
@@ -487,23 +399,3 @@ struct AppLibraryView: View {
     }
 }
 
-
-private extension IPAInstallState {
-    var label: String {
-        switch self {
-        case .ready: "Ready"
-        case .installing: "Installing"
-        case .installed: "Installed"
-        case .failed: "Needs attention"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .ready: .blue
-        case .installing: .orange
-        case .installed: .green
-        case .failed: .orange
-        }
-    }
-}

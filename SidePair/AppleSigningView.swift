@@ -4,8 +4,6 @@ struct AppleSigningView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var model: AppleSigningModel
     @ObservedObject var connection: RSDConnectionModel
-    var onNavigate: (AquaSignRoute) -> Void = { _ in }
-    var onPair: () -> Void = {}
     @State private var isPasswordVisible = false
 
     var body: some View {
@@ -46,13 +44,6 @@ struct AppleSigningView: View {
             .padding(.bottom, 20)
         }
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            tabBar
-                .padding(.horizontal, 18)
-                .padding(.top, 8)
-                .padding(.bottom, 8)
-                .background(.clear)
-        }
         .toolbar(.hidden, for: .navigationBar)
         .task { model.restoreSessionIfAvailable() }
         .sheet(item: $model.twoFactorPrompt) { prompt in
@@ -285,32 +276,6 @@ struct AppleSigningView: View {
             .padding(.top, 2)
     }
 
-    private var tabBar: some View {
-        HStack(spacing: 4) {
-            tabItem("Pair", symbol: "rectangle.on.rectangle", selected: false, action: onPair)
-            tabItem("App Library", symbol: "square.stack.3d.up.fill", selected: true) {}
-            tabItem("Settings", symbol: "gearshape", selected: false) { onNavigate(.settings) }
-        }
-        .padding(8)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay { Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1) }
-        .shadow(color: .black.opacity(0.08), radius: 14, y: 5)
-    }
-
-    private func tabItem(_ title: String, symbol: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: symbol).font(.system(size: 20, weight: .semibold))
-                Text(title).font(.system(size: 11, weight: .medium))
-            }
-            .foregroundStyle(selected ? Color.blue : Color.secondary)
-            .frame(maxWidth: .infinity)
-            .frame(height: 62)
-            .background { if selected { Capsule().fill(Color(uiColor: .tertiarySystemGroupedBackground)) } }
-        }
-        .buttonStyle(.plain)
-        .disabled(selected)
-    }
 }
 
 private struct TwoFactorChallengeView: View {

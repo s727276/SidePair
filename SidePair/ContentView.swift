@@ -12,39 +12,34 @@ struct ContentView: View {
     @StateObject private var signing = AppleSigningModel()
     @StateObject private var library = AppLibraryModel()
     @State private var navigationPath: [AquaSignRoute] = []
+    @State private var selectedTab: AquaSignTab = .pair
     @State private var isProcessingWidgetRefresh = false
+    @AppStorage("sidepairShowSettingsInTabBar") private var showSettingsInTabBar = false
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    introCard
-                    pairingCard
-                    connectionCard
-                    setupCard
-                    if let pairingFileURL = pairing.pairingFileURL {
-                        pairingFileCard(pairingFileURL)
-                    }
-                    privacyNote
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 28)
-            }
-            .background(Color(uiColor: .systemGroupedBackground))
-            .navigationTitle("AquaSign")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    NavigationLink(value: AquaSignRoute.appLibrary) {
-                        Image(systemName: "square.stack.3d.up.fill")
-                    }
-                    .accessibilityLabel("App Library")
+            TabView(selection: $selectedTab) {
+                pairingScreen
+                    .tabItem { Label("Pair", systemImage: "rectangle.on.rectangle") }
+                    .tag(AquaSignTab.pair)
 
-                    NavigationLink(value: AquaSignRoute.appleSigning) {
-                        Image(systemName: "person.badge.key.fill")
-                    }
-                    .accessibilityLabel("Apple signing")
+                AppLibraryView(
+                    connection: connection,
+                    signing: signing,
+                    library: library,
+                    onOpenSettings: openSettings
+                )
+                .tabItem { Label("Signing", systemImage: "square.stack.3d.up.fill") }
+                .tag(AquaSignTab.signing)
+
+                if showSettingsInTabBar {
+                    SettingsView(
+                        signing: signing,
+                        onNavigate: navigate,
+                        onOpenSettings: openSettings
+                    )
+                    .tabItem { Label("Settings", systemImage: "gearshape") }
+                    .tag(AquaSignTab.settings)
                 }
             }
             .navigationDestination(for: AquaSignRoute.self) { route in
@@ -53,53 +48,170 @@ struct ContentView: View {
                     AppLibraryView(
                         connection: connection,
                         signing: signing,
-                        pairingFileURL: pairing.pairingFileURL,
                         library: library,
-                        onNavigate: navigate,
-                        onPair: returnToPair
+                        onOpenSettings: openSettings
                     )
                 case .appleSigning:
-                    AppleSigningView(
-                        model: signing,
-                        connection: connection,
-                        onNavigate: navigate,
-                        onPair: returnToPair
-                    )
+                    AppleSigningView(model: signing, connection: connection)
+                case .developerAppIDs:
+                    DeveloperAppIDsView(signing: signing) {
+                        navigate(to: .appleSigning)
+                    }
                 case .settings:
                     SettingsView(
                         signing: signing,
                         onNavigate: navigate,
-                        onPair: returnToPair
+                        onOpenSettings: openSettings
                     )
                 }
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: openSettings) {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Settings")
+                }
+            }
+            .toolbar(.hidden, for: .tabBar)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                mainTabBar
+                    .padding(.horizontal, 18)
+                    .padding(.top, 8)
+                    .padding(.bottom, 8)
+                    .background(.clear)
             }
         }
         .tint(.blue)
         .task {
+            library.reconcilePendingSelfRefresh()
             signing.restoreSessionIfAvailable()
             await processWidgetRefreshRequest()
+            if selectedTab == .pair { attemptAutomaticConnection() }
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
-            Task { await processWidgetRefreshRequest() }
+            Task {
+                await processWidgetRefreshRequest()
+                if selectedTab == .pair { attemptAutomaticConnection() }
+            }
         }
+        .onChange(of: showSettingsInTabBar) { _, isEnabled in
+            if !isEnabled, selectedTab == .settings {
+                selectedTab = .pair
+            }
+        }
+        .onChange(of: selectedTab) { _, tab in
+            navigationPath.removeAll()
+            if tab == .pair { attemptAutomaticConnection() }
+        }
+        .onChange(of: pairing.pairingFileURL) { _, _ in
+            attemptAutomaticConnection()
+        }
+        .onChange(of: connection.deviceIP) { _, _ in
+            attemptAutomaticConnection()
+        }
+    }
+
+    private var pairingScreen: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                introCard
+                pairingCard
+                connectionCard
+                setupCard
+                if let pairingFileURL = pairing.pairingFileURL {
+                    pairingFileCard(pairingFileURL)
+                }
+                privacyNote
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .padding(.bottom, 28)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .navigationTitle("AquaSign")
+        .navigationBarTitleDisplayMode(.large)
+    }
+
+    private var mainTabBar: some View {
+        HStack(spacing: 7) {
+            mainTabItem("Pair", symbol: "rectangle.on.rectangle", selected: selectedTab == .pair) {
+                selectedTab = .pair
+            }
+            mainTabItem("Signing", symbol: "square.stack.3d.up.fill", selected: selectedTab == .signing) {
+                selectedTab = .signing
+            }
+            if showSettingsInTabBar {
+                mainTabItem("Settings", symbol: "gearshape", selected: selectedTab == .settings) {
+                    selectedTab = .settings
+                }
+            }
+        }
+        .padding(8)
+        .background(.regularMaterial, in: Capsule())
+        .overlay { Capsule().stroke(.white.opacity(0.82), lineWidth: 1) }
+        .shadow(color: .black.opacity(0.08), radius: 16, y: 6)
+    }
+
+    private func mainTabItem(
+        _ title: String,
+        symbol: String,
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: symbol)
+                    .font(.system(size: 19, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(selected ? Color(red: 0.10, green: 0.46, blue: 0.91) : Color(red: 0.46, green: 0.52, blue: 0.64))
+            .frame(maxWidth: .infinity)
+            .frame(height: 54)
+            .background {
+                if selected { Capsule().fill(.white.opacity(0.62)) }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func navigate(to route: AquaSignRoute) {
         switch route {
         case .appLibrary:
-            navigationPath = [.appLibrary]
+            navigationPath.removeAll()
+            selectedTab = .signing
         case .appleSigning:
             navigationPath = [.appleSigning]
-        case .settings:
-            if navigationPath.last != .settings {
-                navigationPath.append(.settings)
+        case .developerAppIDs:
+            if navigationPath.last != .developerAppIDs {
+                navigationPath.append(.developerAppIDs)
             }
+        case .settings:
+            openSettings()
         }
     }
 
-    private func returnToPair() {
-        navigationPath.removeAll()
+    private func openSettings() {
+        if showSettingsInTabBar {
+            navigationPath.removeAll()
+            selectedTab = .settings
+        } else if navigationPath.last != .settings {
+            navigationPath = [.settings]
+        }
+    }
+
+    private func attemptAutomaticConnection() {
+        guard selectedTab == .pair,
+              navigationPath.isEmpty,
+              pairing.pairingFileURL != nil,
+              connection.hasValidDeviceIP,
+              connection.isSupportedSystem,
+              !connection.isConnecting,
+              !connection.isConnected else { return }
+        connection.connect(using: pairing.pairingFileURL)
     }
 
     @MainActor
@@ -112,7 +224,8 @@ struct ContentView: View {
 
         defaults.set(false, forKey: requestKey)
         isProcessingWidgetRefresh = true
-        navigationPath = [.appLibrary]
+        navigationPath.removeAll()
+        selectedTab = .signing
         defer { isProcessingWidgetRefresh = false }
 
         signing.restoreSessionIfAvailable()
@@ -245,14 +358,17 @@ struct ContentView: View {
 
     private var connectionCard: some View {
         VStack(alignment: .leading, spacing: 15) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("LocalDevVPN connection")
+            HStack {
+                Text("Device connection")
                     .font(.headline)
-                Text("Connect the VPN first, then enter its Device IP. The default is 10.7.0.1—not the VPN’s Connected To address.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                connectionStatus
             }
+
+            Text("AquaSign tests the saved Device IP automatically when Pair opens or the app returns to the foreground. A successful RSD connection is the only confirmation that the tunnel is reachable.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 7) {
                 Text("DEVICE IP")
@@ -269,62 +385,80 @@ struct ContentView: View {
                     .background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
 
-            if pairing.pairingFileURL == nil && !connection.isConnected {
-                Label("Pair this iPhone first to create a Remote Pairing record.", systemImage: "info.circle")
+            if pairing.pairingFileURL == nil {
+                Label("Pair this iPhone first. AquaSign will try connecting after the pairing record is saved.", systemImage: "info.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-
-            if case let .failed(message) = connection.state {
-                Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.footnote)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !connection.hasValidDeviceIP {
+                Label("Enter a valid IPv4 Device IP from LocalDevVPN settings to enable automatic connection.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
                     .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !connection.isSupportedSystem {
+                Label("Automatic Remote Pairing connections require iOS 27 or later.", systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if connection.isConnected, let details = connection.deviceDetails {
-                VStack(spacing: 9) {
+            if connection.isConnecting {
+                HStack(spacing: 9) {
+                    ProgressView()
+                    Text("Testing the RSD connection…")
+                        .font(.subheadline.weight(.medium))
+                }
+                .foregroundStyle(.blue)
+            } else if connection.isConnected, let details = connection.deviceDetails {
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack {
+                        Label("Connected through LocalDevVPN", systemImage: "checkmark.circle.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.green)
+                        Spacer()
+                        Button("Disconnect") { connection.disconnect() }
+                            .font(.caption.weight(.semibold))
+                            .buttonStyle(.bordered)
+                            .disabled(connection.isInstalling)
+                    }
                     deviceDetailRow("Device", value: details.name)
                     deviceDetailRow("Model", value: details.model)
                     deviceDetailRow("iOS", value: details.version)
                 }
                 .padding(14)
                 .background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            }
-
-            Button {
-                if connection.isConnected {
-                    connection.disconnect()
-                } else {
-                    connection.connect(using: pairing.pairingFileURL)
-                }
-            } label: {
-                HStack(spacing: 9) {
-                    if connection.isConnecting {
-                        ProgressView().tint(.white)
-                    } else {
-                        Image(systemName: connection.isConnected ? "link.badge.minus" : "network")
-                    }
-                    Text(connection.isConnecting ? "Connecting…" : (connection.isConnected ? "Disconnect" : "Connect device"))
-                        .fontWeight(.semibold)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .foregroundStyle(.white)
-                .background(connection.isConnected ? Color.gray : Color.blue, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .disabled(connection.isConnecting || connection.isInstalling || (!connection.isConnected && pairing.pairingFileURL == nil))
-
-            if !connection.isConnected && !connection.isConnecting && !connection.isSupportedSystem {
-                Text("The on-device Remote Pairing tunnel requires iOS 27 or later.")
+            } else if let message = connection.failureMessage {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if pairing.pairingFileURL != nil,
+                      connection.hasValidDeviceIP,
+                      connection.isSupportedSystem {
+                Label("Not connected yet. AquaSign will test the connection when Pair becomes active or the app returns to the foreground.", systemImage: "arrow.triangle.2.circlepath")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var connectionStatus: some View {
+        if connection.isConnecting {
+            statusPill("CONNECTING", color: .orange)
+        } else if connection.isConnected {
+            statusPill("CONNECTED", color: .green)
+        } else if !connection.isSupportedSystem {
+            statusPill("UNAVAILABLE", color: .secondary)
+        } else if connection.failureMessage != nil {
+            statusPill("NEEDS ATTENTION", color: .orange)
+        } else {
+            statusPill("NOT CONNECTED", color: .secondary)
+        }
     }
 
     private func deviceDetailRow(_ title: String, value: String) -> some View {
@@ -443,6 +577,12 @@ struct ContentView: View {
             "Pairing did not complete. Review the message and try again."
         }
     }
+}
+
+enum AquaSignTab: Hashable {
+    case pair
+    case signing
+    case settings
 }
 
 #Preview {

@@ -7,6 +7,8 @@ struct IPAAppMetadata: Codable, Equatable, Identifiable {
     var version: String
     let archiveFileName: String
     var customizedArchiveFileName: String? = nil
+    var selfRefreshArchiveFileName: String? = nil
+    var selfRefreshBuildNumber: String? = nil
     var managedTeamID: String? = nil
     var installState: IPAInstallState
     var lastError: String?
@@ -71,8 +73,13 @@ enum IPAArchiveInspector {
         return PreparedIPA(metadata: metadata, fileURL: prepared.fileURL)
     }
 
-    static func archiveURL(for metadata: IPAAppMetadata) -> URL {
-        archiveURL(named: metadata.customizedArchiveFileName ?? metadata.archiveFileName)
+    static func archiveURL(for metadata: IPAAppMetadata, preferSelfRefreshSource: Bool = false) -> URL {
+        if preferSelfRefreshSource,
+           let selfRefreshArchiveFileName = metadata.selfRefreshArchiveFileName {
+            let selfRefreshURL = archiveURL(named: selfRefreshArchiveFileName)
+            if FileManager.default.fileExists(atPath: selfRefreshURL.path) { return selfRefreshURL }
+        }
+        return archiveURL(named: metadata.customizedArchiveFileName ?? metadata.archiveFileName)
     }
 
     static func archiveURL(named fileName: String) -> URL {
@@ -85,7 +92,7 @@ enum IPAArchiveInspector {
         return MobileProvisioningProfileReader.expirationDate(from: profileData)
     }
 
-    private static func profileTeamIdentifier(at appBundleURL: URL) -> String? {
+    static func profileTeamIdentifier(at appBundleURL: URL) -> String? {
         let profileURL = appBundleURL.appendingPathComponent("embedded.mobileprovision")
         guard let profileData = try? Data(contentsOf: profileURL) else { return nil }
         return MobileProvisioningProfileReader.teamIdentifier(from: profileData)

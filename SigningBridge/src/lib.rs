@@ -145,6 +145,15 @@ struct CertificateRecoveryInfo {
     certificates: Vec<CertificateRecoveryOption>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeveloperAppID {
+    app_id_id: String,
+    name: String,
+    identifier: String,
+    feature_ids: Vec<String>,
+}
+
 enum SignInOutcome {
     Complete {
         session_json: String,
@@ -552,6 +561,60 @@ async fn restore_session(
     ))
 }
 
+async fn list_developer_app_ids(
+    session_json: String,
+    storage_dir: PathBuf,
+) -> Result<Vec<DeveloperAppID>, String> {
+    let saved: StoredSession = serde_json::from_str(&session_json)
+        .map_err(|error| format!("saved signing session is invalid: {error}"))?;
+    let anisette_provider = create_anisette_provider(&storage_dir)?;
+    let account = AppleAccount::builder(&saved.apple_id)
+        .anisette_provider(anisette_provider)
+        .build()
+        .await
+        .map_err(|error| format!("could not restore Apple developer session: {error}"))?;
+    let token = AppToken {
+        token: saved.token,
+        duration: saved.duration,
+        expiry: saved.expiry,
+    };
+    let mut developer_session = DeveloperSession::new(
+        token,
+        saved.adsid,
+        account.grandslam_client.clone(),
+        account.anisette_generator.clone(),
+    );
+    let team = developer_session
+        .list_teams()
+        .await
+        .map_err(|error| format!("could not verify the saved developer team: {error}"))?
+        .into_iter()
+        .find(|team| team.team_id == saved.team_id)
+        .ok_or_else(|| "the saved Apple developer team is no longer available; sign in again".to_string())?;
+    let response = developer_session
+        .list_app_ids(&team, DeveloperDeviceType::Ios)
+        .await
+        .map_err(|error| format!("Apple could not list App IDs for this team: {error}"))?;
+
+    let mut app_ids = response
+        .app_ids
+        .into_iter()
+        .map(|app_id| DeveloperAppID {
+            app_id_id: app_id.app_id_id,
+            name: app_id.name,
+            identifier: app_id.identifier,
+            feature_ids: app_id.features.keys().cloned().collect(),
+        })
+        .collect::<Vec<_>>();
+    app_ids.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.identifier.to_lowercase().cmp(&right.identifier.to_lowercase()))
+    });
+    Ok(app_ids)
+}
+
 async fn sign_ipa_for_session(
     session_json: String,
     storage_dir: PathBuf,
@@ -810,6 +873,17 @@ fn run_revoke_and_retry_certificate(
     ))
 }
 
+fn run_list_developer_app_ids(
+    session_json: String,
+    storage_dir: PathBuf,
+) -> Result<Vec<DeveloperAppID>, String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("could not start App ID listing runtime: {error}"))?;
+    runtime.block_on(list_developer_app_ids(session_json, storage_dir))
+}
+
 fn run_sign_ipa(
     session_json: String,
     storage_dir: PathBuf,
@@ -1001,6 +1075,46 @@ pub unsafe extern "C" fn sidepair_restore_session(
         }
         Err(_) => {
             unsafe { write_out(out_error, "unexpected panic while restoring signing session".to_string()) };
+            2
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sidepair_list_developer_app_ids(
+    session_json: *const c_char,
+    storage_dir: *const c_char,
+    out_app_ids_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    if out_app_ids_json.is_null() || out_error.is_null() {
+        return 2;
+    }
+    unsafe {
+        *out_app_ids_json = ptr::null_mut();
+        *out_error = ptr::null_mut();
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        initialize()?;
+        let session_json = unsafe { read_string(session_json, "saved signing session") }?;
+        let storage_dir = PathBuf::from(unsafe { read_string(storage_dir, "storage directory") }?);
+        let app_ids = run_list_developer_app_ids(session_json, storage_dir)?;
+        serde_json::to_string(&app_ids)
+            .map_err(|error| format!("could not serialize the App ID list: {error}"))
+    }));
+
+    match result {
+        Ok(Ok(app_ids_json)) => {
+            unsafe { write_out(out_app_ids_json, app_ids_json) };
+            0
+        }
+        Ok(Err(error)) => {
+            unsafe { write_out(out_error, error) };
+            1
+        }
+        Err(_) => {
+            unsafe { write_out(out_error, "unexpected panic while listing developer App IDs".to_string()) };
             2
         }
     }

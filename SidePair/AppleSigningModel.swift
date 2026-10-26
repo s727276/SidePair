@@ -17,6 +17,15 @@ struct AppleSigningStatus: Decodable, Equatable {
     let profileError: String
 }
 
+struct AppleDeveloperAppID: Decodable, Equatable, Identifiable, Sendable {
+    let appIdId: String
+    let name: String
+    let identifier: String
+    let featureIds: [String]
+
+    var id: String { appIdId }
+}
+
 struct AppleTrustedNumber: Decodable, Identifiable {
     let numberWithDialCode: String
     let lastTwoDigits: String
@@ -69,6 +78,9 @@ final class AppleSigningModel: ObservableObject {
     @Published private(set) var status: AppleSigningStatus?
     @Published private(set) var isWorking = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var developerAppIDs: [AppleDeveloperAppID] = []
+    @Published private(set) var isLoadingDeveloperAppIDs = false
+    @Published private(set) var developerAppIDsErrorMessage: String?
     @Published var twoFactorPrompt: AppleTwoFactorPrompt?
     @Published var certificateRecoveryPrompt: AppleCertificateRecoveryPrompt?
 
@@ -92,6 +104,73 @@ final class AppleSigningModel: ObservableObject {
             startRestore(sessionJSON: session)
         } catch {
             errorMessage = "Could not read the saved Apple signing session: \(error.localizedDescription)"
+        }
+    }
+
+    func loadDeveloperAppIDs() {
+        guard !isWorking, !isLoadingDeveloperAppIDs else { return }
+        developerAppIDs = []
+        developerAppIDsErrorMessage = nil
+        guard hasSigningBridge else {
+            developerAppIDsErrorMessage = "This build does not include Apple developer services."
+            return
+        }
+        guard status != nil else {
+            developerAppIDsErrorMessage = "Sign in to your Apple developer account to view registered App IDs."
+            return
+        }
+
+        do {
+            guard let sessionJSON = try AppleSigningKeychain.load() else {
+                developerAppIDsErrorMessage = "Your saved Apple signing session is unavailable. Sign in again to continue."
+                return
+            }
+            try prepareProtectedStorage()
+            let storagePath = Self.signingStorageURL().path
+            isLoadingDeveloperAppIDs = true
+
+            #if SIGNING_BRIDGE
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                var appIDsOutput: UnsafeMutablePointer<CChar>?
+                var errorOutput: UnsafeMutablePointer<CChar>?
+                let result = sessionJSON.withCString { sessionPointer in
+                    storagePath.withCString { storagePointer in
+                        sidepair_list_developer_app_ids(
+                            sessionPointer,
+                            storagePointer,
+                            &appIDsOutput,
+                            &errorOutput
+                        )
+                    }
+                }
+                let appIDsJSON = appIDsOutput.map { String(cString: $0) }
+                let errorText = errorOutput.map { String(cString: $0) }
+                if let appIDsOutput { sidepair_signing_string_free(appIDsOutput) }
+                if let errorOutput { sidepair_signing_string_free(errorOutput) }
+
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.isLoadingDeveloperAppIDs = false
+                    guard result == 0,
+                          let appIDsJSON,
+                          let data = appIDsJSON.data(using: .utf8),
+                          let appIDs = try? JSONDecoder().decode([AppleDeveloperAppID].self, from: data) else {
+                        self.developerAppIDs = []
+                        self.developerAppIDsErrorMessage = errorText ?? "Apple returned an invalid App ID list. Try again."
+                        return
+                    }
+                    self.developerAppIDs = appIDs.sorted {
+                        let nameOrder = $0.name.localizedCaseInsensitiveCompare($1.name)
+                        return nameOrder == .orderedSame
+                            ? $0.identifier.localizedCaseInsensitiveCompare($1.identifier) == .orderedAscending
+                            : nameOrder == .orderedAscending
+                    }
+                }
+            }
+            #endif
+        } catch {
+            isLoadingDeveloperAppIDs = false
+            developerAppIDsErrorMessage = "Could not prepare the secure Apple developer session: \(error.localizedDescription)"
         }
     }
 
@@ -617,6 +696,14 @@ private func sidepair_restore_session(
     _ storageDirectory: UnsafePointer<CChar>,
     _ bundleID: UnsafePointer<CChar>,
     _ outStatusJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
+    _ outError: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> Int32
+
+@_silgen_name("sidepair_list_developer_app_ids")
+private func sidepair_list_developer_app_ids(
+    _ sessionJSON: UnsafePointer<CChar>,
+    _ storageDirectory: UnsafePointer<CChar>,
+    _ outAppIDsJSON: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>,
     _ outError: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
 ) -> Int32
 
