@@ -32,6 +32,15 @@ struct ContentView: View {
                 .tabItem { Label("Signing", systemImage: "square.stack.3d.up.fill") }
                 .tag(AquaSignTab.signing)
 
+                DeviceManagerView(
+                    connection: connection,
+                    pairing: pairing,
+                    onOpenSettings: openSettings,
+                    onOpenPairedDevices: { navigate(to: .pairedDevices) }
+                )
+                .tabItem { Label("Device", systemImage: "iphone") }
+                .tag(AquaSignTab.device)
+
                 if showSettingsInTabBar {
                     SettingsView(
                         signing: signing,
@@ -63,6 +72,14 @@ struct ContentView: View {
                         onNavigate: navigate,
                         onOpenSettings: openSettings
                     )
+                case .pairedDevices:
+                    PairedDevicesView(
+                        pairing: pairing,
+                        connection: connection,
+                        onPairAnother: startPairingAnotherDevice,
+                        onConnectSelected: activateSelectedDevice,
+                        onConfigureDevice: openPairingTab
+                    )
                 }
             }
             .toolbar {
@@ -86,6 +103,9 @@ struct ContentView: View {
         .task {
             library.reconcilePendingSelfRefresh()
             signing.restoreSessionIfAvailable()
+            if let selectedDevice = pairing.selectedDevice {
+                connection.deviceIP = selectedDevice.deviceIP
+            }
             await processWidgetRefreshRequest()
             if selectedTab == .pair { attemptAutomaticConnection() }
         }
@@ -105,10 +125,14 @@ struct ContentView: View {
             navigationPath.removeAll()
             if tab == .pair { attemptAutomaticConnection() }
         }
-        .onChange(of: pairing.pairingFileURL) { _, _ in
-            attemptAutomaticConnection()
+        .onChange(of: pairing.selectedDeviceID) { _, deviceID in
+            guard deviceID != nil else { return }
+            activateSelectedDevice()
         }
-        .onChange(of: connection.deviceIP) { _, _ in
+        .onChange(of: connection.deviceIP) { _, deviceIP in
+            if let deviceID = pairing.selectedDeviceID {
+                pairing.updateDeviceIP(deviceIP, for: deviceID)
+            }
             attemptAutomaticConnection()
         }
     }
@@ -141,6 +165,9 @@ struct ContentView: View {
             }
             mainTabItem("Signing", symbol: "square.stack.3d.up.fill", selected: selectedTab == .signing) {
                 selectedTab = .signing
+            }
+            mainTabItem("Device", symbol: "iphone", selected: selectedTab == .device) {
+                selectedTab = .device
             }
             if showSettingsInTabBar {
                 mainTabItem("Settings", symbol: "gearshape", selected: selectedTab == .settings) {
@@ -191,7 +218,23 @@ struct ContentView: View {
             }
         case .settings:
             openSettings()
+        case .pairedDevices:
+            if navigationPath.last != .pairedDevices {
+                navigationPath.append(.pairedDevices)
+            }
         }
+    }
+
+    private func openPairingTab() {
+        navigationPath.removeAll()
+        selectedTab = .pair
+    }
+
+    private func startPairingAnotherDevice() {
+        guard !connection.isInstalling, !pairing.isBusy else { return }
+        navigationPath.removeAll()
+        selectedTab = .pair
+        pairing.startPairing()
     }
 
     private func openSettings() {
@@ -201,6 +244,16 @@ struct ContentView: View {
         } else if navigationPath.last != .settings {
             navigationPath = [.settings]
         }
+    }
+
+    private func activateSelectedDevice() {
+        guard !connection.isInstalling,
+              !pairing.isBusy,
+              let device = pairing.selectedDevice else { return }
+        connection.disconnect()
+        connection.deviceIP = device.deviceIP
+        guard connection.hasValidDeviceIP, connection.isSupportedSystem else { return }
+        connection.connect(using: device.pairingFileURL)
     }
 
     private func attemptAutomaticConnection() {
@@ -582,6 +635,7 @@ struct ContentView: View {
 enum AquaSignTab: Hashable {
     case pair
     case signing
+    case device
     case settings
 }
 

@@ -5,6 +5,7 @@ enum AquaSignRoute: Hashable {
     case appleSigning
     case developerAppIDs
     case settings
+    case pairedDevices
 }
 
 struct SettingsView: View {

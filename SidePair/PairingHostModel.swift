@@ -21,6 +21,8 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate, UN
     @Published private(set) var pairingFileURL: URL?
     @Published private(set) var deviceName: String?
     @Published private(set) var deviceModel: String?
+    @Published private(set) var devices: [PairedDevice] = []
+    @Published private(set) var selectedDeviceID: UUID?
 
     private var currentSession = UUID()
     private var activeSocket: PairingSocketState?
@@ -31,7 +33,12 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate, UN
     override init() {
         super.init()
         UNUserNotificationCenter.current().delegate = self
-        restorePairingFile()
+        restorePairedDevices()
+    }
+
+    var selectedDevice: PairedDevice? {
+        guard let selectedDeviceID else { return nil }
+        return devices.first { $0.id == selectedDeviceID }
     }
 
     var isBusy: Bool {
@@ -46,6 +53,19 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate, UN
     var isSupportedSystem: Bool {
         if #available(iOS 27.0, *) { return true }
         return false
+    }
+
+    func selectDevice(_ id: UUID) {
+        guard devices.contains(where: { $0.id == id }) else { return }
+        selectedDeviceID = id
+        UserDefaults.standard.set(id.uuidString, forKey: PairedDeviceStorage.selectedDeviceIDKey)
+        refreshSelectedDevice()
+    }
+
+    func updateDeviceIP(_ deviceIP: String, for id: UUID) {
+        guard let index = devices.firstIndex(where: { $0.id == id }) else { return }
+        devices[index].deviceIP = deviceIP
+        PairedDeviceStorage.saveDevices(devices)
     }
 
     func startPairing() {
@@ -86,6 +106,7 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate, UN
 
     private func beginPairingRun() {
         let session = UUID()
+        let recordID = UUID()
         currentSession = session
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "AquaSign Remote Pairing") { [weak self] in
             Task { @MainActor in self?.stopPairing() }
@@ -130,7 +151,8 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate, UN
                             socket: socket,
                             host: host,
                             pinContext: pinContext,
-                            session: session
+                            session: session,
+                            recordID: recordID
                         ) { result in
                             DispatchQueue.main.async {
                                 self?.finish(result, session: session)
@@ -187,10 +209,31 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate, UN
         endBackgroundTask()
 
         switch result {
-        case let .paired(url, name, model):
-            pairingFileURL = url
-            deviceName = name
-            deviceModel = model
+        case let .paired(id, url, name, model, udid):
+            let previousDevice = udid.flatMap { deviceID in devices.first { $0.udid == deviceID } }
+            let shouldSelectDevice = selectedDeviceID == nil || previousDevice?.id == selectedDeviceID
+            if let previousDevice {
+                devices.removeAll { $0.id == previousDevice.id }
+                if previousDevice.pairingFileURL != url {
+                    try? FileManager.default.removeItem(at: previousDevice.pairingFileURL)
+                }
+            }
+
+            let device = PairedDevice(
+                id: id,
+                name: name,
+                model: model,
+                deviceIP: previousDevice?.deviceIP ?? "",
+                udid: udid,
+                pairingFileName: url.lastPathComponent
+            )
+            devices.insert(device, at: 0)
+            PairedDeviceStorage.saveDevices(devices)
+            if shouldSelectDevice {
+                selectedDeviceID = device.id
+                UserDefaults.standard.set(device.id.uuidString, forKey: PairedDeviceStorage.selectedDeviceIDKey)
+                refreshSelectedDevice()
+            }
             UserDefaults.standard.set(name, forKey: "pairedDeviceName")
             UserDefaults.standard.set(model, forKey: "pairedDeviceModel")
             state = .paired
@@ -207,21 +250,52 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate, UN
         backgroundTask = .invalid
     }
 
-    private func restorePairingFile() {
-        let url = Self.pairingFileURL()
-        guard FileManager.default.fileExists(atPath: url.path),
-              let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int,
-              size > 0 else { return }
-        pairingFileURL = url
-        deviceName = UserDefaults.standard.string(forKey: "pairedDeviceName")
-        deviceModel = UserDefaults.standard.string(forKey: "pairedDeviceModel")
-        state = .paired
+    private func restorePairedDevices() {
+        let defaults = UserDefaults.standard
+        devices = (PairedDeviceStorage.loadDevices() ?? []).filter {
+            FileManager.default.fileExists(atPath: $0.pairingFileURL.path)
+        }
+
+        if devices.isEmpty {
+            let legacyURL = PairedDeviceStorage.legacyPairingFileURL
+            if FileManager.default.fileExists(atPath: legacyURL.path),
+               let size = try? FileManager.default.attributesOfItem(atPath: legacyURL.path)[.size] as? Int,
+               size > 0 {
+                let device = PairedDevice(
+                    id: UUID(),
+                    name: defaults.string(forKey: "pairedDeviceName") ?? "This iPhone",
+                    model: defaults.string(forKey: "pairedDeviceModel") ?? "iPhone",
+                    deviceIP: defaults.string(forKey: "sidepairLoopbackDeviceIP") ?? "10.7.0.1",
+                    udid: nil,
+                    pairingFileName: PairedDeviceStorage.legacyPairingFileName
+                )
+                devices = [device]
+                PairedDeviceStorage.saveDevices(devices)
+            }
+        }
+
+        let storedID = defaults.string(forKey: PairedDeviceStorage.selectedDeviceIDKey).flatMap(UUID.init(uuidString:))
+        selectedDeviceID = storedID.flatMap { id in devices.contains(where: { $0.id == id }) ? id : nil }
+            ?? devices.first?.id
+        if let selectedDeviceID {
+            defaults.set(selectedDeviceID.uuidString, forKey: PairedDeviceStorage.selectedDeviceIDKey)
+            refreshSelectedDevice()
+            state = .paired
+        } else {
+            defaults.removeObject(forKey: PairedDeviceStorage.selectedDeviceIDKey)
+        }
     }
 
-    private static func pairingFileURL() -> URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("SidePair", isDirectory: true)
-            .appendingPathComponent("pairingFile.plist")
+    private func refreshSelectedDevice() {
+        guard let selectedDevice else {
+            pairingFileURL = nil
+            deviceName = nil
+            deviceModel = nil
+            return
+        }
+        pairingFileURL = selectedDevice.pairingFileURL
+        deviceName = selectedDevice.name
+        deviceModel = selectedDevice.model
     }
 
     private static func prepareHost() throws -> PreparedHost {
@@ -314,6 +388,7 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate, UN
         host: PreparedHost,
         pinContext: PairingPINContext,
         session: UUID,
+        recordID: UUID,
         completion: @escaping (PairingRunResult) -> Void
     ) {
         guard let clientFD = socket.acceptConnection() else {
@@ -366,12 +441,12 @@ final class PairingHostModel: NSObject, ObservableObject, NetServiceDelegate, UN
 
         do {
             let data = Data(bytes: pairingBytes, count: Int(pairingLength))
-            let url = pairingFileURL()
+            let url = PairedDeviceStorage.pairingFileURL(for: recordID)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
             let name = peer?.pointee.name.map { String(cString: $0) } ?? "This iPhone"
             let model = peer?.pointee.model.map { String(cString: $0) } ?? "iPhone"
-            completion(.paired(url: url, name: name, model: model))
+            completion(.paired(id: recordID, url: url, name: name, model: model, udid: nil))
         } catch {
             completion(.failed("Could not save the pairing record: \(error.localizedDescription)"))
         }
@@ -385,7 +460,7 @@ private struct PreparedHost {
 }
 
 private enum PairingRunResult {
-    case paired(url: URL, name: String, model: String)
+    case paired(id: UUID, url: URL, name: String, model: String, udid: String?)
     case failed(String)
     case stopped
 }
